@@ -215,7 +215,6 @@
   "SKETCHREVEAL.AIGen.Go": "Generate",
   "SKETCHREVEAL.AIGen.Cancel": "Cancel",
   "SKETCHREVEAL.AIGen.Failed": "AI generation failed: {error}",
-  "SKETCHREVEAL.AIGen.Saved": "Image saved: {path}",
   "SKETCHREVEAL.AIGen.PickPainted": "Painted image: {name}",
   "SKETCHREVEAL.AIGen.PickSketch": "Sketch: {name}",
   "SKETCHREVEAL.AIGen.TypePainted": "Painted image",

@@ -77,7 +77,7 @@ EN = {
  "AIGen.UseBackground": "Use the scene background as a reference", "AIGen.Versions": "Versions",
  "AIGen.Estimate": "≈ ${cost} · {model} · {w}×{h}", "AIGen.NoKey": "No API key for {provider}. Add it in the AI Image Gen settings.",
  "AIGen.NeedPainted": "Pick the painted image first (or give the scene a background image).", "AIGen.NeedDescription": "Describe the image first.",
- "AIGen.Go": "Generate", "AIGen.Cancel": "Cancel", "AIGen.Failed": "AI generation failed: {error}", "AIGen.Saved": "Image saved: {path}",
+ "AIGen.Go": "Generate", "AIGen.Cancel": "Cancel", "AIGen.Failed": "AI generation failed: {error}",
  "AIGen.PickPainted": "Painted image: {name}", "AIGen.PickSketch": "Sketch: {name}",
  "AIGen.TypePainted": "Painted image", "AIGen.TypeSketch": "Sketch from painted image",
 }
@@ -157,7 +157,7 @@ PL = {
  "AIGen.UseBackground": "Użyj tła sceny jako referencji", "AIGen.Versions": "Wersje",
  "AIGen.Estimate": "≈ ${cost} · {model} · {w}×{h}", "AIGen.NoKey": "Brak klucza API dla {provider}. Dodaj go w ustawieniach AI Image Gen.",
  "AIGen.NeedPainted": "Najpierw wybierz malunek (albo ustaw scenie obraz tła).", "AIGen.NeedDescription": "Najpierw opisz obraz.",
- "AIGen.Go": "Generuj", "AIGen.Cancel": "Anuluj", "AIGen.Failed": "Generowanie AI nie powiodło się: {error}", "AIGen.Saved": "Zapisano obraz: {path}",
+ "AIGen.Go": "Generuj", "AIGen.Cancel": "Anuluj", "AIGen.Failed": "Generowanie AI nie powiodło się: {error}",
  "AIGen.PickPainted": "Malunek: {name}", "AIGen.PickSketch": "Szkic: {name}",
  "AIGen.TypePainted": "Malunek", "AIGen.TypeSketch": "Szkic z malunku",
 }

@@ -209,10 +209,7 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     target.disabled = true;
     try {
       const path = await fn();
-      if (path) {
-        this.render(); // pola zostały zebrane przed startem; ścieżka jest już w this.meta
-        ui.notifications.info(TE("AIGen.Saved", { path }));
-      }
+      if (path) this.render(); // pola zostały zebrane przed startem; ścieżka jest już w this.meta (widać ją w polu)
     } finally { target.disabled = false; }
   }
 
