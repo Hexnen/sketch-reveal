@@ -24,6 +24,16 @@
       <label>{{localize "SKETCHREVEAL.Field.Painted"}}</label>
       <div class="form-fields"><file-picker name="meta.painted" type="image" value="{{meta.painted}}"></file-picker></div>
     </div>
+    {{#if canAi}}
+    <div class="form-group sr-ai-gen">
+      <label>{{localize "SKETCHREVEAL.AIGen.Label"}}</label>
+      <div class="form-fields">
+        <button type="button" data-action="aiPainted"><i class="fa-solid fa-wand-magic-sparkles"></i> {{localize "SKETCHREVEAL.AIGen.Painted"}}</button>
+        <button type="button" data-action="aiSketch"><i class="fa-solid fa-pencil"></i> {{localize "SKETCHREVEAL.AIGen.Sketch"}}</button>
+      </div>
+      <p class="hint">{{localize "SKETCHREVEAL.AIGen.Hint"}}</p>
+    </div>
+    {{/if}}
   </fieldset>
   {{else}}
   <p class="notes">{{localize "SKETCHREVEAL.Editor.SceneNote"}}</p>

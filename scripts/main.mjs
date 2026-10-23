@@ -5,6 +5,7 @@ import {
   runTransitionBarrier, syncIdForScene, transitionSyncId,
 } from "./play.mjs";
 import { onRenderSceneConfig } from "./scene-tab.mjs";
+import { registerAiTypes } from "./ai-image.mjs";
 import { registerPerfSettings } from "./store.mjs";
 import { registerStore, resolveScene } from "./store.mjs";
 
@@ -42,6 +43,9 @@ Hooks.once("ready", () => {
   registerSocket();
   const mod = game.modules.get(MODULE_ID);
   mod.api = { openManager: () => RevealManager.open(), showToAll: (presetId) => showPresetToAll(presetId) };
+  // AI Image Gen (opcjonalnie): nasze typy obrazów trafiają do jego okna konfiguracji; kolejność startu modułów jest dowolna
+  registerAiTypes();
+  Hooks.on("aiImageGen.ready", (api) => { if (game.user.isGM) registerAiTypes(api); });
   if (game.settings.get(MODULE_ID, "preload")) preloadScenes();
 });
 

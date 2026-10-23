@@ -69,6 +69,17 @@ EN = {
  "Error.Play": "Sketch Reveal: {error}",
  "Settings.Transitions.Name": "Play scene transitions", "Settings.Transitions.Hint": "Turn off to skip reveal transitions on this client.",
  "Settings.Preload.Name": "Preload images", "Settings.Preload.Hint": "Warm the cache with the reveal images of the active/viewed scene at startup.",
+ "AIGen.Label": "AI Image Gen", "AIGen.Painted": "Generate painted image (AI)", "AIGen.Sketch": "Sketch from painted (AI)",
+ "AIGen.Hint": "Uses the AI Image Gen module (model, keys and budget limits are set there). The sketch is drawn from the painted image, so both share the same framing. Nothing is saved before you pick a version.",
+ "AIGen.TitlePainted": "Generate painted image", "AIGen.TitleSketch": "Sketch from the painted image",
+ "AIGen.DescPainted": "Describe the image", "AIGen.DescSketch": "Extra instructions (optional)",
+ "AIGen.PlaceholderPainted": "e.g. a rainy neon street at night, painted illustration", "AIGen.PlaceholderSketch": "e.g. keep the signs readable",
+ "AIGen.UseBackground": "Use the scene background as a reference", "AIGen.Versions": "Versions",
+ "AIGen.Estimate": "≈ ${cost} · {model} · {w}×{h}", "AIGen.NoKey": "No API key for {provider}. Add it in the AI Image Gen settings.",
+ "AIGen.NeedPainted": "Pick the painted image first (or give the scene a background image).", "AIGen.NeedDescription": "Describe the image first.",
+ "AIGen.Go": "Generate", "AIGen.Cancel": "Cancel", "AIGen.Failed": "AI generation failed: {error}", "AIGen.Saved": "Image saved: {path}",
+ "AIGen.PickPainted": "Painted image: {name}", "AIGen.PickSketch": "Sketch: {name}",
+ "AIGen.TypePainted": "Painted image", "AIGen.TypeSketch": "Sketch from painted image",
 }
 
 PL = {
@@ -138,6 +149,17 @@ PL = {
  "Sync.Waiting": "Sketch Reveal: czekam, aż {n} klient(ów) będzie gotowych…", "Sync.Timeout": "Sketch Reveal: nie zdążyli: {names}. Startuję mimo to.", "Sync.Failed": "Sketch Reveal: nie udało się przygotować u: {names}.",
  "Settings.Transitions.Name": "Odtwarzaj przejścia scen", "Settings.Transitions.Hint": "Wyłącz, by pominąć przejścia reveal na tym kliencie.",
  "Settings.Preload.Name": "Wstępne ładowanie obrazów", "Settings.Preload.Hint": "Przy starcie rozgrzewa cache obrazami reveal aktywnej/oglądanej sceny.",
+ "AIGen.Label": "AI Image Gen", "AIGen.Painted": "Wygeneruj malunek (AI)", "AIGen.Sketch": "Szkic z malunku (AI)",
+ "AIGen.Hint": "Używa modułu AI Image Gen (model, klucze i limity budżetu ustawiasz tam). Szkic powstaje z malunku, więc oba mają ten sam kadr. Nic nie jest zapisywane przed wyborem wersji.",
+ "AIGen.TitlePainted": "Wygeneruj malunek", "AIGen.TitleSketch": "Szkic z malunku",
+ "AIGen.DescPainted": "Opisz obraz", "AIGen.DescSketch": "Dodatkowe wskazówki (opcjonalnie)",
+ "AIGen.PlaceholderPainted": "np. deszczowa ulica z neonami nocą, ilustracja malowana", "AIGen.PlaceholderSketch": "np. zachowaj czytelne szyldy",
+ "AIGen.UseBackground": "Użyj tła sceny jako referencji", "AIGen.Versions": "Wersje",
+ "AIGen.Estimate": "≈ ${cost} · {model} · {w}×{h}", "AIGen.NoKey": "Brak klucza API dla {provider}. Dodaj go w ustawieniach AI Image Gen.",
+ "AIGen.NeedPainted": "Najpierw wybierz malunek (albo ustaw scenie obraz tła).", "AIGen.NeedDescription": "Najpierw opisz obraz.",
+ "AIGen.Go": "Generuj", "AIGen.Cancel": "Anuluj", "AIGen.Failed": "Generowanie AI nie powiodło się: {error}", "AIGen.Saved": "Zapisano obraz: {path}",
+ "AIGen.PickPainted": "Malunek: {name}", "AIGen.PickSketch": "Szkic: {name}",
+ "AIGen.TypePainted": "Malunek", "AIGen.TypeSketch": "Szkic z malunku",
 }
 
 root = pathlib.Path(__file__).resolve().parent.parent / "lang"

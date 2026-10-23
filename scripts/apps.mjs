@@ -2,6 +2,7 @@
 import { MODULE_ID, defaultConfig, deepMerge, sanitizeConfig } from "./config.mjs";
 import { exportRevealWebm } from "./export-ui.mjs";
 import { optimizeRevealImages, optimizerApi } from "./optimize.mjs";
+import { aiApi, aiGeneratePainted, aiGenerateSketch } from "./ai-image.mjs";
 import { applyShowIf, configFormHtml, readForm } from "./form.mjs";
 import { broadcastClose, playSplash, preloadForAll, showSplashToAll } from "./play.mjs";
 import { detectLightHints } from "./fx/ai-hints.mjs";
@@ -79,7 +80,7 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     window: { icon: "fa-solid fa-paintbrush", resizable: true },
     position: { width: 560, height: 720 },
     form: { handler: RevealEditor.#onSubmit, closeOnSubmit: true },
-    actions: { preview: RevealEditor.#onPreview, exportWebm: RevealEditor.#onExportWebm, optimizeImages: RevealEditor.#onOptimize },
+    actions: { preview: RevealEditor.#onPreview, exportWebm: RevealEditor.#onExportWebm, optimizeImages: RevealEditor.#onOptimize, aiPainted: RevealEditor.#onAiPainted, aiSketch: RevealEditor.#onAiSketch },
   };
 
   static PARTS = { body: { template: `modules/${MODULE_ID}/templates/editor.hbs`, scrollable: [".sr-editor-scroll"] } };
@@ -119,6 +120,7 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       configHtml: configFormHtml(this.cfg, this.scene ? "" : this._aiHtml()),
       saveLabel: T("Editor.Save"),
       canOptimize: !this.scene && !!optimizerApi(), // przycisk tylko gdy działa moduł Media Optimizer (Local)
+      canAi: !this.scene && !!aiApi(), // generowanie obrazów tylko gdy działa moduł AI Image Gen (i jesteś GM-em)
     };
   }
 
@@ -199,6 +201,35 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       console.error(`${MODULE_ID} | optymalizacja obrazów`, e);
       ui.notifications.error(TE("Optimize.Failed", { error: String(e?.message ?? e) }));
     } finally { target.disabled = false; }
+  }
+
+  /** „Wygeneruj malunek (AI)” / „Szkic z malunku (AI)”: wynik wpisuje się w preset dopiero po wyborze wersji. */
+  async #aiRun(target, fn) {
+    this._collect();
+    target.disabled = true;
+    try {
+      const path = await fn();
+      if (path) {
+        this.render(); // pola zostały zebrane przed startem; ścieżka jest już w this.meta
+        ui.notifications.info(TE("AIGen.Saved", { path }));
+      }
+    } finally { target.disabled = false; }
+  }
+
+  static async #onAiPainted(event, target) {
+    return this.#aiRun(target, async () => {
+      const path = await aiGeneratePainted({ name: this.meta.name || T("Editor.Unnamed"), current: this.meta.painted });
+      if (path) { this.meta.painted = path; this.hints = []; } // podpowiedzi świateł dotyczą konkretnego obrazu malowanego
+      return path;
+    });
+  }
+
+  static async #onAiSketch(event, target) {
+    return this.#aiRun(target, async () => {
+      const path = await aiGenerateSketch({ name: this.meta.name || T("Editor.Unnamed"), painted: this.meta.painted });
+      if (path) this.meta.sketch = path;
+      return path;
+    });
   }
 
   static async #onExportWebm() {

@@ -37,6 +37,10 @@
       {
         "id": "local-media-optimizer",
         "type": "module"
+      },
+      {
+        "id": "ai-image-gen",
+        "type": "module"
       }
     ]
   }

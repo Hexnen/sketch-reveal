@@ -25,6 +25,16 @@ preset dostaje nowe ścieżki, oryginały zostają. Każdy klient i tak skaluje 
 głównie rozmiar pobierania (np. 13,9 MB → 2,5 MB). Upload idzie z `optimized: true`, żeby optymalizator nie kodował pliku drugi raz;
 tak samo oznaczona jest ikona makra. Bez modułu przycisk się nie pokazuje.
 
+## AI Image Gen (opcjonalnie)
+Z modułem [AI Image Gen](https://github.com/Hexnen/ai-image-gen) (tylko GM) edytor presetu i zakładka **Reveal** sceny mają dwa przyciski:
+- **Wygeneruj malunek (AI)**: opis obrazu, liczba wersji i (gdy scena ma tło) opcja „użyj tła sceny jako referencji”; proporcje bierze z tła sceny albo z obecnego malunku.
+- **Szkic z malunku (AI)**: szkic powstaje jako *edycja* malunku (malunek jest referencją), więc oba obrazy mają ten sam kadr, kompozycję i proporcje — tego wymaga efekt szkic → malunek.
+
+Przed startem dialog pokazuje szacowany koszt, a przy braku klucza API ostrzeżenie. Wersje wybierasz w oknie wyboru AI Image Gen; nic nie jest zapisywane przed wyborem.
+Wynik trafia do `worlds/<świat>/sketch-reveal/images/` (WebP ≤ 4096 px; malunek q0,88, szkic q0,95) i od razu do pola presetu/sceny.
+Model, dostawca, prompt i budżet ustawiasz w AI Image Gen (okno konfiguracji → grupa **Sketch Reveal**: typy „Malunek” i „Szkic z malunku”, z gotowymi promptami do edycji).
+Moduły działają niezależnie: bez AI Image Gen przyciski się nie pokazują, a AI Image Gen bez Sketch Reveal po prostu nie ma tej grupy.
+
 ## Ustawienia klienta (wydajność)
 Rozdzielczość podglądu, limit klatek, lekkie animacje napisu, licznik FPS, auto-jakość — ustawienia modułu (per klient).
 

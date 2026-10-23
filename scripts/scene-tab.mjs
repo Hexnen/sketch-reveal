@@ -4,6 +4,7 @@ import { MODULE_ID } from "./config.mjs";
 import { RevealEditor } from "./apps.mjs";
 import { exportRevealWebm } from "./export-ui.mjs";
 import { playSplash } from "./play.mjs";
+import { aiApi, aiGeneratePainted, aiGenerateSketch } from "./ai-image.mjs";
 import { getPreset, listPresets, resolveScene, sceneBackground, sceneFlags } from "./store.mjs";
 
 const TAB = "sketchreveal";
@@ -56,6 +57,14 @@ function tabHtml(scene, active) {
         <div class="form-fields"><file-picker name="${F}.painted" type="image" value="${esc(f.painted ?? "")}"></file-picker></div>
         <p class="hint">${esc(bg ? T("Scene.PaintedHint") : T("Scene.PaintedHintNoBg"))}</p>
       </div>
+      ${aiApi() ? `<div class="form-group sr-ai-gen">
+        <label>${esc(T("AIGen.Label"))}</label>
+        <div class="form-fields sr-scene-buttons">
+          <button type="button" data-sr="ai-painted"><i class="fa-solid fa-wand-magic-sparkles"></i> ${esc(T("AIGen.Painted"))}</button>
+          <button type="button" data-sr="ai-sketch"><i class="fa-solid fa-pencil"></i> ${esc(T("AIGen.Sketch"))}</button>
+        </div>
+        <p class="hint">${esc(T("AIGen.Hint"))}</p>
+      </div>` : ""}
     </fieldset>
     <fieldset>
       <legend>${esc(T("Scene.Overrides"))}</legend>
@@ -95,6 +104,24 @@ export function onRenderSceneConfig(app, html) {
   const tab = tmp.firstElementChild;
   const miscTab = root.querySelector('.tab[data-tab="misc"]');
   if (miscTab) miscTab.after(tab); else (root.querySelector("footer") ?? root).before(tab);
+
+  // AI Image Gen (opcjonalnie): wynik wpisuje się w pola formularza sceny, zapisuje je zwykły „Zapisz” arkusza
+  const field = (n) => tab.querySelector(`file-picker[name="flags.${MODULE_ID}.${n}"]`);
+  const setField = (n, path) => { const el = field(n); if (el) { el.value = path; el.dispatchEvent(new Event("change", { bubbles: true })); } };
+  const aiRun = async (btn, fn) => {
+    btn.disabled = true;
+    try { await fn(); } finally { btn.disabled = false; }
+  };
+  tab.querySelector('[data-sr="ai-painted"]')?.addEventListener("click", (ev) => aiRun(ev.currentTarget, async () => {
+    const path = await aiGeneratePainted({ name: app.document.name, background: sceneBackground(app.document), current: field("painted")?.value });
+    if (path) setField("painted", path);
+  }));
+  tab.querySelector('[data-sr="ai-sketch"]')?.addEventListener("click", (ev) => aiRun(ev.currentTarget, async () => {
+    const f = sceneFlags(app.document);
+    const painted = field("painted")?.value || getPreset(f.presetId)?.painted || sceneBackground(app.document);
+    const path = await aiGenerateSketch({ name: app.document.name, painted });
+    if (path) setField("sketch", path);
+  }));
 
   tab.querySelector('[data-sr="edit"]').addEventListener("click", () => {
     if (!sceneFlags(app.document).presetId) return ui.notifications.warn(T("Scene.PickPreset"));
