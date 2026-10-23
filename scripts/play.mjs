@@ -11,6 +11,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SOCKET = `module.${MODULE_ID}`;
 const READY_TIMEOUT_MS = 90000; // zimna wektoryzacja szkicu (faza rysowania) potrafi trwać dziesiątki sekund; potem cache w IndexedDB
 const CLIENT_WAIT_MS = READY_TIMEOUT_MS + 20000; // klient czekający na „go” dłużej niż to zamyka splash sam (GM zniknął)
+const START_LEAD_MS = 500; // „go” niesie czas startu = teraz + 500 ms (zegar GM-a) — tyle ma dojść do wszystkich klientów
+/** Czas epokowy w ms z wysoką rozdzielczością (monotoniczny; różnice między klientami wyznacza syncClock). */
+const epoch = () => performance.timeOrigin + performance.now();
 let currentSplash = null;     // { overlay, player, close() }
 let currentTransition = null; // { overlay, player, close() }
 
@@ -126,11 +129,41 @@ function onSplashState(v) {
   if (v.phase === "prepare") {
     const preset = getPreset(v.presetId);
     if (preset) clientPrepare(v.id, presetPayload(preset));
-  } else if (v.phase === "go") clientGo(v.id);
+  } else if (v.phase === "go") clientGo(v.id, v.startAt);
   else if (v.phase === "close") closeCurrent();
 }
 
+const clockOffset = new Map(); // id sesji → { offset: zegar GM minus mój [ms], rtt }
+const tsyncPending = new Map(); // id sesji → próbki
+
+/**
+ * Różnica zegara względem inicjatora (GM): kilka rund ping–pong przez gniazdo, wybieramy próbkę o najmniejszym RTT
+ * (offset = g + rtt/2 − c1). Inicjator ma offset 0. Bez odpowiedzi klient startuje od razu po „go” (bez wspólnego czasu).
+ */
+function syncClock(id) {
+  if (runs.has(id)) { clockOffset.set(id, { offset: 0, rtt: 0 }); return; }
+  tsyncPending.set(id, []);
+  let n = 0;
+  const send = () => {
+    if (n++ >= 6 || !tsyncPending.has(id)) return;
+    game.socket.emit(SOCKET, { action: "tsync", id, userId: game.user.id, c0: epoch() });
+    setTimeout(send, 70);
+  };
+  send();
+  setTimeout(() => tsyncPending.delete(id), CLIENT_WAIT_MS);
+}
+function onTsyncReply(msg) {
+  const samples = tsyncPending.get(msg.id);
+  if (!samples || msg.to !== game.user.id || typeof msg.c0 !== "number" || typeof msg.g !== "number") return;
+  const c1 = epoch(), rtt = c1 - msg.c0;
+  if (!(rtt >= 0 && rtt < 5000)) return;
+  samples.push({ rtt, offset: msg.g + rtt / 2 - c1 });
+  const best = samples.reduce((a, b) => (b.rtt < a.rtt ? b : a));
+  clockOffset.set(msg.id, best);
+}
+
 function clientPrepare(id, payload) {
+  syncClock(id);
   // fazy przygotowania lecą do GM (diagnostyka: na którym kroku klient stoi)
   const s = stageSplash(payload, (phase, ms) => {
     const msg = { action: "phase", id, userId: game.user.id, phase, ms, visible: document.visibilityState };
@@ -145,10 +178,22 @@ function clientPrepare(id, payload) {
     if (runs.has(id)) onReady(msg); else game.socket.emit(SOCKET, msg);
   });
 }
-function clientGo(id) {
+function clientGo(id, startAt) {
   const s = staged.get(id);
   staged.delete(id);
-  s?.start();
+  if (!s) return;
+  // wspólny start: czas GM-a przeliczony na mój zegar; bez wiarygodnej synchronizacji (brak odpowiedzi / duży RTT) — od razu
+  const info = clockOffset.get(id);
+  let delay = 0;
+  if (typeof startAt === "number" && info && info.rtt < 1000) delay = Math.max(0, Math.min(5000, startAt - info.offset - epoch()));
+  clockOffset.delete(id); tsyncPending.delete(id);
+  const begin = () => {
+    s.start();
+    // diagnostyka: kiedy faktycznie wystartowałem, w zegarze GM-a (różnice między klientami = rozbieżność startu)
+    const msg = { action: "phase", id, userId: game.user.id, phase: "started", gmAt: epoch() + (info?.offset ?? 0), delay: Math.round(delay), rtt: Math.round(info?.rtt ?? -1) };
+    if (runs.has(id)) Hooks.callAll("sketchReveal.phase", msg); else game.socket.emit(SOCKET, msg);
+  };
+  if (delay > 0) setTimeout(begin, delay); else begin();
 }
 function onReady({ id, userId, ok }) {
   const r = runs.get(id);
@@ -206,7 +251,7 @@ export async function showSplashToAll(presetId) {
   const waiting = () => [...expected].filter((u) => game.users.get(u)?.active && !run.ready.has(u) && !run.failed.has(u));
   const allDone = new Promise((res) => { run.wake = () => { if (!waiting().length) res(true); }; });
   let hud, ticker;
-  const state = (phase) => game.settings.set(MODULE_ID, "splashState", { id, presetId, phase, at: Date.now() });
+  const state = (phase, extra = {}) => game.settings.set(MODULE_ID, "splashState", { id, presetId, phase, at: Date.now(), ...extra });
   try {
     await state("prepare");
     hud = createSyncHud(expected, run);
@@ -218,13 +263,15 @@ export async function showSplashToAll(presetId) {
     }
     const failed = [...run.failed].map((u) => game.users.get(u)?.name).filter(Boolean).map(foundry.utils.escapeHTML);
     if (failed.length) ui.notifications.warn(game.i18n.format("SKETCHREVEAL.Sync.Failed", { names: failed.join(", ") }));
-    await state("go");
+    await state("go", { startAt: epoch() + START_LEAD_MS });
   } catch (e) {
     console.error(`${MODULE_ID} | pokaż wszystkim`, e);
     try { await state("close"); } catch { /* */ } // nie zostawiaj klientów za zasłoną po wyjątku
     throw e;
   } finally {
-    clearInterval(ticker); hud?.dispose(); runs.delete(id);
+    clearInterval(ticker); hud?.dispose();
+    // wpis sesji żyje jeszcze przez okno startu: raporty „started”/tsync i własny start inicjatora go potrzebują
+    setTimeout(() => runs.delete(id), START_LEAD_MS + 3000);
   }
 }
 
@@ -245,6 +292,9 @@ export function registerSocket() {
     if (!msg || typeof msg !== "object") return;
     switch (msg.action) {
       case "ready": if (typeof msg.id === "string" && runs.has(msg.id)) onReady(msg); break;
+      // synchronizacja zegara: inicjator odpowiada swoim czasem
+      case "tsync": if (typeof msg.id === "string" && typeof msg.userId === "string" && runs.has(msg.id)) game.socket.emit(SOCKET, { action: "tsync-r", id: msg.id, to: msg.userId, c0: msg.c0, g: epoch() }); break;
+      case "tsync-r": if (typeof msg.id === "string") onTsyncReply(msg); break;
       case "preload": preloadImages(msg.urls); break;
       // diagnostyka: każdy klient z modułem odpowiada (GM widzi, kto odbiera gniazdo)
       case "ping": game.socket.emit(SOCKET, { action: "pong", userId: game.user.id, visible: document.visibilityState }); break;
