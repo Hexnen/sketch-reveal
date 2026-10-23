@@ -130,6 +130,7 @@ function onSplashState(v) {
     const preset = getPreset(v.presetId);
     if (preset) clientPrepare(v.id, presetPayload(preset));
   } else if (v.phase === "go") clientGo(v.id, v.startAt);
+  else if (v.phase === "tgo") { transitionGoSeen.set(v.id, v.startAt); transitionGoWaiters.get(v.id)?.(v.startAt); } // wspólny start przejścia sceny
   else if (v.phase === "close") closeCurrent();
 }
 
@@ -311,8 +312,9 @@ export function registerSocket() {
 let pending = null; // { overlay, player, ready, cfg, cancel() }
 
 /** canvasInit: natychmiast zasłoń scenę (kolor papieru) i zacznij ładować — bez mignięcia żywej sceny. */
-export function armTransition(resolved) {
+export function armTransition(resolved, syncId = null) {
   cancelTransition();
+  if (syncId) syncClock(syncId); // różnica zegara względem aktywującego GM-a (wspólny start przejścia)
   const cfg = resolved.config;
   const overlay = makeOverlay("sr-transition");
   overlay.style.setProperty("--sr-cover", cfg.paper.paper ? cfg.paper.paperColor : "#ffffff");
@@ -322,7 +324,7 @@ export function armTransition(resolved) {
   const player = new RevealPlayer({ container: stage, sketchUrl: resolved.sketchUrl, paintedUrl: resolved.paintedUrl, config: cfg, fit: "cover", perf: clientPerf(), hints: resolved.hints, hintsStrict: resolved.hintsStrict });
   let cancelled = false;
   const ready = player.prepare().then(() => !cancelled, (e) => { if (!cancelled) console.error(`${MODULE_ID} | przygotowanie przejścia`, e); return false; });
-  const t = { overlay, player, ready, cfg, cancel() { cancelled = true; clearTimeout(t.guard); player.dispose(); overlay.remove(); if (pending === t) pending = null; } };
+  const t = { overlay, player, ready, cfg, syncId, cancel() { cancelled = true; clearTimeout(t.guard); player.dispose(); overlay.remove(); if (pending === t) pending = null; } };
   pending = t;
   // zabezpieczenie: nie zostawiaj zasłony na zawsze (np. scena nie dojechała do canvasReady)
   t.guard = setTimeout(() => { if (pending === t) t.cancel(); }, 45000);
@@ -357,12 +359,89 @@ export async function runTransition() {
     // po canvasReady straż 45 s już nie działa — własny limit, żeby zawieszone przygotowanie nie zostawiło zasłony na zawsze
     if (!(await Promise.race([t.ready, sleep(READY_TIMEOUT_MS).then(() => false)]))) { await close(); return; } // błąd/limit → bez efektu, scena żywa
     if (closed) return;
+    if (t.syncId) await transitionStart(t.syncId, () => closed); // wspólny start (albo samodzielny, gdy brak sygnału)
+    if (closed) return;
     overlay.classList.add("sr-ready");
     await player.play();
     if (!closed) { if (cfg.holdSec > 0) await sleep(Math.min(cfg.holdSec, 1.5) * 1000); await close(); }
   } catch (e) {
     console.error(`${MODULE_ID} | transition`, e);
     close();
+  }
+}
+
+/* ---- wspólny start przejść scen aktywowanych przez GM-a */
+// Aktywacja sceny dociera do wszystkich klientów hookiem updateScene, ale każdy ładuje płótno we własnym tempie. Aktywujący GM
+// (inicjator) czeka, aż każdy klient zgłosi „scena narysowana i przejście przygotowane”, i wysyła wspólny czas startu.
+// Klient, który dołączył później albo nie widział aktywacji, nie czeka (gra od razu). Brak sygnału „tgo” → start po limicie.
+const TRANSITION_SYNC_WAIT_MS = 60000;
+const activations = new Map();           // sceneId → performance.now() ostatniej aktywacji widzianej przez TEN klient
+const transitionGoWaiters = new Map();   // syncId → resolve(startAt)
+
+/** Id sesji przejścia: wspólne dla wszystkich klientów (po scenie), bo każdy widzi aktywację w innym momencie. */
+export const transitionSyncId = (sceneId) => `t:${sceneId}`;
+const transitionGoSeen = new Map(); // syncId → startAt „tgo”, które dotarło, zanim klient zgłosił gotowość (np. po limicie czasu)
+
+/** Hook updateScene (każdy klient): zapamiętaj, że scena została właśnie aktywowana. */
+export function noteSceneActivation(sceneId) { activations.set(sceneId, performance.now()); }
+
+/** syncId dla przejścia sceny, jeśli ten klient widział aktywację w ciągu ostatnich 2 minut; inaczej null (bez synchronizacji). */
+export function syncIdForScene(sceneId) {
+  const at = activations.get(sceneId);
+  activations.delete(sceneId);
+  return at !== undefined && performance.now() - at < 120000 ? transitionSyncId(sceneId) : null;
+}
+
+function reportTransitionReady(id) {
+  const msg = { action: "ready", id, userId: game.user.id, ok: true };
+  if (runs.has(id)) onReady(msg); else game.socket.emit(SOCKET, msg);
+}
+
+/** Klient: zgłoś gotowość, poczekaj na „tgo” i odczekaj do wspólnego czasu startu. */
+async function transitionStart(id, isClosed) {
+  const startAt = await new Promise((resolve) => {
+    if (transitionGoSeen.has(id)) { resolve(transitionGoSeen.get(id)); return; } // „tgo” już było
+    const timer = setTimeout(() => resolve(null), TRANSITION_SYNC_WAIT_MS);
+    transitionGoWaiters.set(id, (v) => { clearTimeout(timer); resolve(v); });
+    reportTransitionReady(id);
+  });
+  transitionGoWaiters.delete(id); transitionGoSeen.delete(id);
+  if (isClosed()) return;
+  const info = clockOffset.get(id);
+  let delay = 0;
+  if (typeof startAt === "number" && info && info.rtt < 1000) delay = Math.max(0, Math.min(5000, startAt - info.offset - epoch()));
+  clockOffset.delete(id); tsyncPending.delete(id);
+  if (delay > 0) await sleep(delay);
+  // moment faktycznego startu (po odczekaniu) w zegarze GM-a — diagnostyka rozbieżności między klientami
+  const msg = { action: "phase", id, userId: game.user.id, phase: "started", gmAt: epoch() + (info?.offset ?? 0), delay: Math.round(delay), rtt: Math.round(info?.rtt ?? -1) };
+  if (runs.has(id)) Hooks.callAll("sketchReveal.phase", msg); else game.socket.emit(SOCKET, msg);
+}
+
+/**
+ * Inicjator (GM, który aktywował scenę): czeka na gotowość klientów oglądających tę scenę i wysyła wspólny start.
+ * Klient, który nie ogląda tej sceny (inny widok) przestaje być oczekiwany po 5 s; limit całości 60 s.
+ */
+export async function runTransitionBarrier(sceneId, syncId) {
+  const expected = new Set(game.users.filter((u) => u.active).map((u) => u.id));
+  const run = { ready: new Set(), failed: new Set(), expected, wake: () => {} };
+  runs.set(syncId, run);
+  syncClock(syncId); // inicjator: offset 0
+  const t0 = performance.now();
+  const stillWaiting = () => [...expected].filter((u) => {
+    const user = game.users.get(u);
+    if (!user?.active || run.ready.has(u)) return false;
+    if (performance.now() - t0 > 5000 && user.viewedScene && user.viewedScene !== sceneId) return false; // ogląda inną scenę
+    return true;
+  });
+  const allDone = new Promise((res) => { run.wake = () => { if (!stillWaiting().length) res(true); }; });
+  const ticker = setInterval(() => run.wake(), 500);
+  try {
+    await Promise.race([allDone, sleep(TRANSITION_SYNC_WAIT_MS).then(() => false)]);
+    transitionGoSeen.delete(syncId);
+    await game.settings.set(MODULE_ID, "splashState", { id: syncId, phase: "tgo", startAt: epoch() + START_LEAD_MS, at: Date.now() });
+  } finally {
+    clearInterval(ticker);
+    setTimeout(() => runs.delete(syncId), START_LEAD_MS + 3000);
   }
 }
 

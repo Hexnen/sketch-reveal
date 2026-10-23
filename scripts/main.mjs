@@ -1,6 +1,9 @@
 import { MODULE_ID } from "./config.mjs";
 import { RevealManager, createPresetMacro, showPresetToAll } from "./apps.mjs";
-import { armTransition, cancelTransition, preloadImages, registerSocket, registerSplashState, runTransition } from "./play.mjs";
+import {
+  armTransition, cancelTransition, noteSceneActivation, preloadImages, registerSocket, registerSplashState, runTransition,
+  runTransitionBarrier, syncIdForScene, transitionSyncId,
+} from "./play.mjs";
 import { onRenderSceneConfig } from "./scene-tab.mjs";
 import { registerPerfSettings } from "./store.mjs";
 import { registerStore, resolveScene } from "./store.mjs";
@@ -61,13 +64,21 @@ Hooks.on("canvasInit", () => {
   cancelTransition();
   if (!scene || sameScene) return; // przeładowanie tej samej sceny (np. zmiana ustawień) nie odpala przejścia
   const r = resolveFor(scene);
-  if (r) armTransition(r);
+  // aktywacja sceny widziana przez ten klient → przejście startuje wspólnie z innymi (syncId), inaczej od razu po przygotowaniu
+  if (r) armTransition(r, syncIdForScene(scene.id));
 });
 Hooks.on("canvasReady", () => runTransition());
 Hooks.on("canvasTearDown", () => cancelTransition());
 
 /* ---- zmiana flag sceny / aktywacja: rozgrzej nowe obrazy */
-Hooks.on("updateScene", (scene, changes) => {
+Hooks.on("updateScene", (scene, changes, options, userId) => {
+  if (changes.active === true) {
+    noteSceneActivation(scene.id); // każdy klient: ta scena właśnie została aktywowana
+    // aktywujący GM jest inicjatorem wspólnego startu przejścia (czeka na gotowość klientów i wysyła czas startu)
+    if (userId === game.user.id && game.user.isGM && game.settings.get(MODULE_ID, "transitions") && resolveFor(scene)) {
+      runTransitionBarrier(scene.id, transitionSyncId(scene.id)).catch((e) => console.error(`${MODULE_ID} | wspólny start przejścia`, e));
+    }
+  }
   if (!game.settings.get(MODULE_ID, "preload")) return;
   if (!(MODULE_ID in (changes.flags ?? {})) && changes.active !== true) return;
   const r = resolveScene(scene);
