@@ -1,0 +1,103 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>sketch-reveal glow harness</title>
+<style>
+  html,body{margin:0;height:100%;background:#222;color:#ddd;font:14px sans-serif}
+  #stage{position:fixed;inset:0 0 40px 0;background:#000;overflow:hidden}
+  #bar{position:fixed;left:0;right:0;bottom:0;height:40px;display:flex;gap:8px;align-items:center;padding:0 8px}
+  .cam{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);isolation:isolate}
+  .sr-canvas{position:absolute;inset:0;width:100%;height:100%}
+</style>
+<div id="stage"></div>
+<div id="bar">
+  <select id="set"><option>ulica</option><option>baza</option><option>miasto</option></select>
+  <button id="play">play</button><input id="p" type="range" min="0" max="1" step="0.0005" style="flex:1"><span id="info"></span>
+</div>
+<script type="module">
+  import * as Core from "../vendor/reveal-core.js";
+  import { createGlowLayer, createCoverageProvider, glowAt, sanitizeGlow, GLOW_DEFAULT_OPTS } from "../scripts/fx/glow.mjs";
+  const q = new URLSearchParams(location.search);
+  const effectId = q.get("effect") || "spread";
+  const useCov = q.get("cov") !== "0";
+  const cfg = sanitizeGlow({ enabled: true, from: +(q.get("from") ?? 100), params: q.get("gp") ? JSON.parse(q.get("gp")) : { duration: 3 } });
+  const stage = document.getElementById("stage"), info = document.getElementById("info"), pr = document.getElementById("p");
+  const eff = Core.getEffect(effectId);
+  // decode() potrafi wisieć w nieaktywnej karcie → onload + decode z limitem czasu
+  const loadImage = async (src) => {
+    const i = new Image(); i.decoding = "async";
+    await new Promise((res, rej) => { i.onload = res; i.onerror = () => rej(new Error("img " + src)); i.src = src; });
+    await Promise.race([i.decode().catch(() => {}), new Promise((r) => setTimeout(r, 800))]);
+    return i;
+  };
+
+  let cur = null, token = 0;
+  const H = window.H = { cfg, log: [], alive: false, total: 0, cur: () => cur };
+
+  async function load(set) {
+    const my = ++token;
+    if (cur) { cur.dispose(); cur = null; }
+    const [sketch, painted] = await Promise.all([loadImage(`../samples/${set}/sketch.png`), loadImage(`../samples/${set}/painted.png`)]);
+    if (my !== token) return;
+    const cam = document.createElement("div");
+    cam.className = "cam";
+    const k = Math.min(stage.clientWidth / painted.naturalWidth, stage.clientHeight / painted.naturalHeight);
+    cam.style.width = painted.naturalWidth * k + "px"; cam.style.height = painted.naturalHeight * k + "px";
+    const ec = document.createElement("canvas");
+    ec.className = "sr-canvas"; ec.width = painted.naturalWidth; ec.height = painted.naturalHeight;
+    cam.append(ec); stage.append(cam);
+    const inst = eff.create(ec);
+    inst.setImages(sketch, painted);
+    const ep = { ...eff.defaultParams };
+    inst.setParams(ep);
+    if (inst.isReady?.() === false) await inst.whenReady?.().catch(() => {});
+    if (my !== token) { inst.dispose(); cam.remove(); return; }
+    const effectDur = typeof ep.duration === "number" ? ep.duration : 6;
+    const glowSec = cfg.params.duration, glowStart = effectDur * cfg.from / 100;
+    const total = Math.max(effectDur, glowStart + glowSec);
+    const cov = useCov ? createCoverageProvider(() => inst, effectId) : undefined;
+    const glow = createGlowLayer({
+      host: cam, images: { sketch, painted }, params: cfg.params, effectCanvas: ec, coverage: cov,
+      onAlive: (a) => { H.alive = a; }, onReady: (r) => { H.ready = r; },
+    });
+    const layer = {
+      set, cam, inst, glow, total, effectDur, glowStart, glowSec, over: 0,
+      render(t) {
+        const eP = Math.max(0, Math.min(1, t / effectDur));
+        inst.setProgress(eP); inst.render();
+        const m = glowAt(t, glowStart, glowSec);
+        glow.update(m.glowProgress, m.glowVisible, m.glowIdle, eP);
+        H.state = { t, eP, ...m, display: glow.canvas.style.display };
+      },
+      dispose() { glow.dispose(); inst.dispose(); cam.remove(); },
+    };
+    cur = layer; H.total = total;
+    layer.render(0);
+    return layer;
+  }
+  H.load = load;
+  H.seek = (t) => cur?.render(t);
+
+  // odtwarzanie: t rośnie po końcu osi dalej (żywe światło)
+  let playing = false, t0 = 0, tBase = 0, ticks = 0;
+  H.ticks = () => ticks;
+  const loop = (now) => {
+    requestAnimationFrame(loop);
+    if (!playing || !cur) return;
+    const t = tBase + (now - t0) / 1000;
+    pr.value = Math.min(1, t / cur.total);
+    cur.render(t); ticks++;
+    info.textContent = `t=${t.toFixed(2)}/${cur.total.toFixed(1)} glow p=${H.state.glowProgress.toFixed(2)} idle=${H.state.glowIdle.toFixed(1)} alive=${H.alive}`;
+  };
+  requestAnimationFrame(loop);
+  H.play = (from = 0) => { playing = true; tBase = from; t0 = performance.now(); };
+  H.stop = () => { playing = false; };
+  document.getElementById("play").onclick = () => H.play(0);
+  pr.oninput = (e) => { playing = false; cur?.render(+e.target.value * cur.total); };
+  document.getElementById("set").onchange = (e) => load(e.target.value);
+
+  try {
+    await load(q.get("set") || "ulica");
+    await cur?.glow.whenReady();
+    window.__ready = true; info.textContent = "ready " + (cur?.total ?? "-") + "s";
+  } catch (e) { window.__error = String(e); info.textContent = "ERROR " + e; console.error(e); }
+</script>

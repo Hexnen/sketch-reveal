@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reveal bench</title>
+  <style>
+    body { font: 13px/1.4 system-ui, sans-serif; margin: 16px; background: #111; color: #ddd; }
+    table { border-collapse: collapse; margin: 8px 0; } td, th { border: 1px solid #444; padding: 3px 8px; text-align: right; }
+    th { background: #222; } td:first-child, th:first-child { text-align: left; }
+    pre { background: #000; padding: 8px; max-height: 300px; overflow: auto; white-space: pre-wrap; }
+    canvas { width: 320px; border: 1px solid #333; }
+  </style>
+</head>
+<body>
+  <h1>Reveal — pomiar GPU ms/klatkę</h1>
+  <p id="info">Narzędzie deweloperskie modułu sketch-reveal (serwer statyczny w katalogu modułu). Parametry URL:
+    <code>?effects=spread,strokes,watercolor,speedpaint&amp;scenes=ulica,miasto,baza&amp;frames=60&amp;size=1920</code>
+    (size = dłuższy bok płótna; <code>image</code> = rozmiar obrazu). Start: <code>?run=1</code> albo przycisk.</p>
+  <button id="go">Start</button>
+  <div id="out"></div>
+  <script type="module" src="./bench.mjs"></script>
+</body>
+</html>

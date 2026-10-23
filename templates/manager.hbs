@@ -1,0 +1,54 @@
+<div class="sr-manager-body">
+  <header class="sr-toolbar">
+    {{#if isGM}}
+    <button type="button" data-action="newPreset"><i class="fa-solid fa-plus"></i> {{localize "SKETCHREVEAL.Manager.New"}}</button>
+    <button type="button" data-action="importPreset"><i class="fa-solid fa-file-import"></i> {{localize "SKETCHREVEAL.Manager.Import"}}</button>
+    <button type="button" data-action="closeAll"><i class="fa-solid fa-circle-xmark"></i> {{localize "SKETCHREVEAL.Manager.CloseAll"}}</button>
+    {{/if}}
+  </header>
+  <div class="sr-list">
+    <h3>{{localize "SKETCHREVEAL.Manager.Splashes"}}</h3>
+    {{#each splashes as |p|}}
+    <article class="sr-row" data-preset="{{p.id}}">
+      <img class="sr-thumb" src="{{p.painted}}" loading="lazy" alt="" data-tooltip="SKETCHREVEAL.Manager.DragHint">
+      <div class="sr-info">
+        <strong>{{p.name}}</strong>
+        <span class="sr-meta">{{p.effectLabel}}{{#if p.builtin}} · {{localize "SKETCHREVEAL.Manager.Builtin"}}{{/if}}</span>
+      </div>
+      <div class="sr-actions">
+        <button type="button" class="icon fa-solid fa-play" data-action="playLocal" data-tooltip="SKETCHREVEAL.Manager.PlayLocal"></button>
+        {{#if ../isGM}}
+        <button type="button" class="icon fa-solid fa-users" data-action="playAll" data-tooltip="SKETCHREVEAL.Manager.PlayAll"></button>
+        <button type="button" class="icon fa-solid fa-cloud-arrow-down" data-action="preloadAll" data-tooltip="SKETCHREVEAL.Manager.Preload"></button>
+        <button type="button" class="icon fa-solid fa-pen-to-square" data-action="editPreset" data-tooltip="SKETCHREVEAL.Manager.Edit"></button>
+        <button type="button" class="icon fa-solid fa-film" data-action="exportWebm" data-tooltip="SKETCHREVEAL.Export.Button"></button>
+        <button type="button" class="icon fa-solid fa-file-export" data-action="exportPreset" data-tooltip="SKETCHREVEAL.Manager.Export"></button>
+        <button type="button" class="icon fa-solid fa-copy" data-action="duplicatePreset" data-tooltip="SKETCHREVEAL.Manager.Duplicate"></button>
+        {{#unless p.builtin}}<button type="button" class="icon fa-solid fa-trash" data-action="deletePreset" data-tooltip="SKETCHREVEAL.Manager.Delete"></button>{{/unless}}
+        {{/if}}
+      </div>
+    </article>
+    {{else}}<p class="notes">{{localize "SKETCHREVEAL.Manager.Empty"}}</p>{{/each}}
+    <h3>{{localize "SKETCHREVEAL.Manager.Transitions"}}</h3>
+    {{#each transitions as |p|}}
+    <article class="sr-row" data-preset="{{p.id}}">
+      <img class="sr-thumb" src="{{p.painted}}" loading="lazy" alt="" data-tooltip="SKETCHREVEAL.Manager.DragHint">
+      <div class="sr-info">
+        <strong>{{p.name}}</strong>
+        <span class="sr-meta">{{p.effectLabel}}{{#if p.builtin}} · {{localize "SKETCHREVEAL.Manager.Builtin"}}{{/if}}</span>
+      </div>
+      <div class="sr-actions">
+        <button type="button" class="icon fa-solid fa-play" data-action="playLocal" data-tooltip="SKETCHREVEAL.Manager.PlayLocal"></button>
+        {{#if ../isGM}}
+        <button type="button" class="icon fa-solid fa-users" data-action="playAll" data-tooltip="SKETCHREVEAL.Manager.PlayAll"></button>
+        <button type="button" class="icon fa-solid fa-cloud-arrow-down" data-action="preloadAll" data-tooltip="SKETCHREVEAL.Manager.Preload"></button>
+        <button type="button" class="icon fa-solid fa-pen-to-square" data-action="editPreset" data-tooltip="SKETCHREVEAL.Manager.Edit"></button>
+        <button type="button" class="icon fa-solid fa-file-export" data-action="exportPreset" data-tooltip="SKETCHREVEAL.Manager.Export"></button>
+        <button type="button" class="icon fa-solid fa-copy" data-action="duplicatePreset" data-tooltip="SKETCHREVEAL.Manager.Duplicate"></button>
+        {{#unless p.builtin}}<button type="button" class="icon fa-solid fa-trash" data-action="deletePreset" data-tooltip="SKETCHREVEAL.Manager.Delete"></button>{{/unless}}
+        {{/if}}
+      </div>
+    </article>
+    {{else}}<p class="notes">{{localize "SKETCHREVEAL.Manager.Empty"}}</p>{{/each}}
+  </div>
+</div>

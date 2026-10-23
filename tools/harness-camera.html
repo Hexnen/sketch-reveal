@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>sketch-reveal camera/residue harness</title>
+<style>
+  html,body{margin:0;height:100%;background:#222;color:#ddd;font:14px sans-serif}
+  #stage{position:fixed;inset:0 0 40px 0;background:#000;overflow:hidden}
+  #frame{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);overflow:hidden}
+  #cam{position:absolute;inset:0}
+  #cam img.base{position:absolute;inset:0;width:100%;height:100%}
+  #bar{position:fixed;left:0;right:0;bottom:0;height:40px;display:flex;gap:8px;align-items:center;padding:0 8px}
+</style>
+<div id="stage"><div id="frame"><div id="cam"><img class="base" id="painted"></div></div></div>
+<div id="bar"><input id="p" type="range" min="0" max="1" step="0.001" style="flex:1"><span id="info"></span></div>
+<script type="module">
+  import { createCamera, sanitizeZoom, sanitizeSway, oversampleStyle } from "../scripts/fx/camera.mjs";
+  import * as Cam from "../scripts/fx/camera.mjs";
+  import * as Res from "../scripts/fx/residue.mjs";
+  const q = new URLSearchParams(location.search), set = q.get("set") || "ulica";
+  const load = async (src) => { const i = new Image(); i.src = src; await i.decode(); return i; };
+  const painted = document.getElementById("painted");
+  const sketch = await load(`../samples/${set}/sketch.png`);
+  painted.src = `../samples/${set}/painted.png`; await painted.decode();
+  const frame = document.getElementById("frame"), cam = document.getElementById("cam");
+  const aspect = painted.naturalWidth / painted.naturalHeight;
+  const fit = () => { const sw = innerWidth, sh = innerHeight - 40, w = Math.min(sw, sh * aspect); frame.style.width = w + "px"; frame.style.height = w / aspect + "px"; };
+  fit(); addEventListener("resize", fit);
+  const TOTAL = 16;
+  let blendEvents = [];
+  const res = Res.createResidue({ host: cam, sketchImage: sketch, percent: +(q.get("residue") ?? Res.DEFAULT_RESIDUE), onBlendChange: (b) => blendEvents.push(b) });
+  const camera = createCamera({ el: cam, camera: { zoom: sanitizeZoom(null), sway: sanitizeSway(null) }, total: TOTAL, aspect });
+  window.H = {
+    Cam, Res, res, cam, camera, aspect, TOTAL, blendEvents, sketch, painted,
+    setCamera(zoom, sway) { camera.set({ camera: { zoom: zoom && sanitizeZoom(zoom), sway: sway && sanitizeSway(sway) } }); },
+    at(p, over = 0) { camera.update(p, over); res.update(p); document.getElementById("p").value = p; },
+    isolation() { return Res.sceneIsolation(false, res.blendMode, false); },
+  };
+  document.getElementById("p").oninput = (e) => H.at(+e.target.value);
+  H.at(0);
+  window.__ready = true;
+  document.getElementById("info").textContent = `ready ${painted.naturalWidth}x${painted.naturalHeight}`;
+</script>

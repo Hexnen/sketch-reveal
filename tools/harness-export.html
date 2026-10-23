@@ -1,0 +1,39 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>harness-export</title>
+<style>
+  html,body{margin:0;height:100%;background:#222;color:#ddd;font:14px sans-serif}
+  #stage{position:fixed;left:0;top:0;width:640px;height:420px;background:#000;overflow:hidden}
+  #bar{position:fixed;left:0;top:430px;display:flex;gap:8px;align-items:center;padding:0 8px}
+  .sr-frame{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);overflow:hidden}
+  .sr-cam{position:absolute;inset:0;transform-origin:50% 50%;isolation:isolate}
+  .sr-canvas{position:absolute;inset:0;width:100%;height:100%}
+</style>
+<div id="stage"></div>
+<div id="bar"><button id="go">export</button><button id="cancel">cancel</button><span id="info"></span></div>
+<script type="module">
+  import { RevealPlayer } from "../scripts/player.mjs";
+  import { sanitizeConfig } from "../scripts/config.mjs";
+  import * as X from "../scripts/fx/export.mjs";
+  window.X = X;
+  const q = new URLSearchParams(location.search);
+  const cfg = sanitizeConfig({
+    effectId: "spread", ...(q.get("cfg") ? JSON.parse(q.get("cfg")) : {}),
+    title: { enabled: true, text: "Aleja za barem", subtitle: "Dreamhaven", appearAt: 0.3, style: "serif", place: "center", exit: "none", shade: 0.5 },
+  });
+  const player = new RevealPlayer({
+    container: document.getElementById("stage"),
+    sketchUrl: "../samples/ulica/sketch.png", paintedUrl: "../samples/ulica/painted.png", config: cfg, fit: "contain",
+  });
+  window.player = player;
+  await player.prepare();
+  let ac = null;
+  window.runExport = async (options = { res: "720", fps: 24, quality: "medium" }) => {
+    ac = new AbortController(); window.__ac = ac;
+    const blob = await X.exportWebm({ player, options, signal: ac.signal, onProgress: (f) => { window.__prog = f; document.getElementById("info").textContent = Math.round(f * 100) + "%"; } });
+    window.__blob = blob; return blob;
+  };
+  document.getElementById("go").onclick = () => window.runExport().then((b) => X.downloadBlob(b, "test.webm"));
+  document.getElementById("cancel").onclick = () => ac?.abort();
+  window.__ready = true;
+</script>

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="pl"><head><meta charset="utf-8"><title>harness-title</title>
+<style>
+body{margin:0;background:#000;color:#ddd;font:13px system-ui;display:flex;flex-direction:column;height:100vh}
+#bar{padding:6px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:#111}
+#stage{position:relative;flex:1;background:linear-gradient(135deg,#334 0%,#6a7 50%,#a85 100%);overflow:hidden;min-height:300px}
+input[type=text]{width:140px}
+</style></head><body>
+<div id="bar">
+ <label>p <input id="p" type="range" min="0" max="1" step="0.001" value="0" style="width:300px"></label><span id="pv">0</span>
+ <label>total s <input id="tot" type="number" value="10" style="width:50px"></label>
+ <select id="style"></select><select id="exit"></select><select id="place"></select>
+ <input id="text" type="text" value="Aleja za barem"><input id="sub" type="text" value="Dreamhaven">
+ <label><input id="lite" type="checkbox">lite</label>
+ <label>scale <input id="scale" type="number" value="1" step="0.1" style="width:50px"></label>
+</div>
+<div id="stage"></div>
+<script type="module">
+import * as T from "../scripts/fx/title.mjs";
+window.T = T;
+const $=id=>document.getElementById(id);
+for (const [id,list] of [["style",T.TITLE_STYLES],["exit",T.TITLE_EXITS],["place",T.TITLE_PLACES]])
+  for (const o of list) $(id).add(new Option(o.label,o.value));
+$("style").value="serif"; $("exit").value="blur"; $("place").value="center";
+const opts=()=>({enabled:true,text:$("text").value,subtitle:$("sub").value,style:$("style").value,exit:$("exit").value,place:$("place").value,appearAt:0.1,stay:1,hold:0.5,scale:+$("scale").value,shade:0.5});
+const title=T.createTitle({host:$("stage"),opts:opts(),lite:false});
+window.title=title;
+const upd=()=>{ $("pv").textContent=$("p").value; title.update(+$("p").value,+$("tot").value); };
+$("p").oninput=upd; $("tot").oninput=upd;
+for (const id of ["style","exit","place","text","sub","scale"]) $(id).oninput=()=>{title.setOpts(opts());upd();};
+$("lite").onchange=()=>title.setLite($("lite").checked);
+window.setP=(p)=>{$("p").value=p;upd();};
+window.apply=(o)=>{ Object.entries(o).forEach(([k,v])=>{ if(k==='lite'){$("lite").checked=v;title.setLite(v);} else $(k).value=v;}); title.setOpts(opts()); upd(); };
+window.ready=true;
+</script></body></html>
