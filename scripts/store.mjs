@@ -86,9 +86,9 @@ export async function deletePreset(id) {
 /* ---------------------------------------------------------------- scena */
 export const sceneFlags = (scene) => scene?.flags?.[MODULE_ID] ?? {};
 
-/** Obraz tła sceny (malowany) — v14: poziomy; stare dane: scene.background. */
+/** Obraz tła sceny (malowany) — v14: poziom początkowy (ten, który widzą gracze po aktywacji), potem pierwszy; stare dane: scene.background. */
 export function sceneBackground(scene) {
-  return scene?.firstLevel?.background?.src ?? scene?.background?.src ?? "";
+  return scene?.initialLevel?.background?.src || scene?.firstLevel?.background?.src || scene?.background?.src || "";
 }
 
 /**

@@ -218,5 +218,11 @@
   "SKETCHREVEAL.AIGen.PickPainted": "Painted image: {name}",
   "SKETCHREVEAL.AIGen.PickSketch": "Sketch: {name}",
   "SKETCHREVEAL.AIGen.TypePainted": "Painted image",
-  "SKETCHREVEAL.AIGen.TypeSketch": "Sketch from painted image"
+  "SKETCHREVEAL.AIGen.TypeSketch": "Sketch from painted image",
+  "SKETCHREVEAL.AIGen.TitleWorking": "AI Image Gen",
+  "SKETCHREVEAL.AIGen.Working": "Generating images… this can take a while.",
+  "SKETCHREVEAL.AIGen.AspectUnknown": "Could not read the image size, so the default 3:2 is used.",
+  "SKETCHREVEAL.AIGen.AppliedScene": "The window was closed meanwhile. Saved to the scene: {path}",
+  "SKETCHREVEAL.AIGen.AppliedPreset": "The editor was closed meanwhile. Saved to the preset: {path}",
+  "SKETCHREVEAL.AIGen.EditorClosed": "The editor was closed before the preset was saved. Image saved at: {path}"
 }

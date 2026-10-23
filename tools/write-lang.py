@@ -80,6 +80,10 @@ EN = {
  "AIGen.Go": "Generate", "AIGen.Cancel": "Cancel", "AIGen.Failed": "AI generation failed: {error}",
  "AIGen.PickPainted": "Painted image: {name}", "AIGen.PickSketch": "Sketch: {name}",
  "AIGen.TypePainted": "Painted image", "AIGen.TypeSketch": "Sketch from painted image",
+ "AIGen.TitleWorking": "AI Image Gen", "AIGen.Working": "Generating images… this can take a while.",
+ "AIGen.AspectUnknown": "Could not read the image size, so the default 3:2 is used.",
+ "AIGen.AppliedScene": "The window was closed meanwhile. Saved to the scene: {path}", "AIGen.AppliedPreset": "The editor was closed meanwhile. Saved to the preset: {path}",
+ "AIGen.EditorClosed": "The editor was closed before the preset was saved. Image saved at: {path}",
 }
 
 PL = {
@@ -160,6 +164,10 @@ PL = {
  "AIGen.Go": "Generuj", "AIGen.Cancel": "Anuluj", "AIGen.Failed": "Generowanie AI nie powiodło się: {error}",
  "AIGen.PickPainted": "Malunek: {name}", "AIGen.PickSketch": "Szkic: {name}",
  "AIGen.TypePainted": "Malunek", "AIGen.TypeSketch": "Szkic z malunku",
+ "AIGen.TitleWorking": "AI Image Gen", "AIGen.Working": "Generuję obrazy… to może chwilę potrwać.",
+ "AIGen.AspectUnknown": "Nie udało się odczytać rozmiaru obrazu, więc użyto domyślnych proporcji 3:2.",
+ "AIGen.AppliedScene": "Okno zostało w międzyczasie zamknięte. Zapisano w scenie: {path}", "AIGen.AppliedPreset": "Edytor został w międzyczasie zamknięty. Zapisano w presecie: {path}",
+ "AIGen.EditorClosed": "Edytor zamknięto przed zapisem presetu. Obraz zapisano w: {path}",
 }
 
 root = pathlib.Path(__file__).resolve().parent.parent / "lang"

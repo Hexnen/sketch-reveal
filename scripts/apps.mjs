@@ -2,7 +2,7 @@
 import { MODULE_ID, defaultConfig, deepMerge, sanitizeConfig } from "./config.mjs";
 import { exportRevealWebm } from "./export-ui.mjs";
 import { optimizeRevealImages, optimizerApi } from "./optimize.mjs";
-import { aiApi, aiGeneratePainted, aiGenerateSketch } from "./ai-image.mjs";
+import { aiApi, aiBusy, aiGeneratePainted, aiGenerateSketch, aiGuard } from "./ai-image.mjs";
 import { applyShowIf, configFormHtml, readForm } from "./form.mjs";
 import { broadcastClose, playSplash, preloadForAll, showSplashToAll } from "./play.mjs";
 import { detectLightHints } from "./fx/ai-hints.mjs";
@@ -121,6 +121,7 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       saveLabel: T("Editor.Save"),
       canOptimize: !this.scene && !!optimizerApi(), // przycisk tylko gdy działa moduł Media Optimizer (Local)
       canAi: !this.scene && !!aiApi(), // generowanie obrazów tylko gdy działa moduł AI Image Gen (i jesteś GM-em)
+      aiBusy: aiBusy(this._aiKey), // trwająca generacja przeżywa re-render edytora: oba przyciski zostają wyłączone
     };
   }
 
@@ -203,30 +204,47 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     } finally { target.disabled = false; }
   }
 
-  /** „Wygeneruj malunek (AI)” / „Szkic z malunku (AI)”: wynik wpisuje się w preset dopiero po wyborze wersji. */
-  async #aiRun(target, fn) {
+  get _aiKey() { return `editor:${this.id}`; }
+
+  /**
+   * „Wygeneruj malunek (AI)” / „Szkic z malunku (AI)”: wynik wpisuje się w preset dopiero po wyborze wersji.
+   * Formularz zbieramy PO generacji (edycje z jej trwania nie giną), a gdy okno zdążyło się zamknąć, opłacony obraz trafia
+   * wprost do zapisanego presetu (albo jest tylko zgłoszony powiadomieniem, gdy to był jeszcze niezapisany nowy preset).
+   */
+  async #aiRun(field, generate) {
     this._collect();
-    target.disabled = true;
-    try {
-      const path = await fn();
-      if (path) this.render(); // pola zostały zebrane przed startem; ścieżka jest już w this.meta (widać ją w polu)
-    } finally { target.disabled = false; }
+    return aiGuard(this._aiKey, async (controller, release) => {
+      const path = await generate(controller);
+      if (!path) return null;
+      if (this.rendered) {
+        this._collect();
+        this.meta[field] = path;
+        if (field === "painted") this.hints = []; // podpowiedzi świateł dotyczą konkretnego obrazu malowanego
+        release(); // przed render(): nowy DOM ma mieć włączone przyciski
+        this.render();
+      } else await this.#applyClosed(field, path);
+      return path;
+    }, (on) => this.element?.querySelectorAll('[data-action="aiPainted"], [data-action="aiSketch"]').forEach((b) => { b.disabled = on; }));
   }
 
-  static async #onAiPainted(event, target) {
-    return this.#aiRun(target, async () => {
-      const path = await aiGeneratePainted({ name: this.meta.name || T("Editor.Unnamed"), current: this.meta.painted });
-      if (path) { this.meta.painted = path; this.hints = []; } // podpowiedzi świateł dotyczą konkretnego obrazu malowanego
-      return path;
-    });
+  async #applyClosed(field, path) {
+    const saved = this.presetId ? getPreset(this.presetId) : null;
+    if (saved && !saved.builtin) {
+      try {
+        await savePreset({ ...saved, [field]: path, ...(field === "painted" ? { hints: [] } : {}) });
+        RevealManager.instance?.render();
+        return ui.notifications.info(T("AIGen.AppliedPreset", { path: foundry.utils.escapeHTML(path) }));
+      } catch (e) { console.warn(`${MODULE_ID} | zapis presetu po zamknięciu edytora`, e); }
+    }
+    ui.notifications.info(T("AIGen.EditorClosed", { path: foundry.utils.escapeHTML(path) }));
   }
 
-  static async #onAiSketch(event, target) {
-    return this.#aiRun(target, async () => {
-      const path = await aiGenerateSketch({ name: this.meta.name || T("Editor.Unnamed"), painted: this.meta.painted });
-      if (path) this.meta.sketch = path;
-      return path;
-    });
+  static async #onAiPainted() {
+    return this.#aiRun("painted", (controller) => aiGeneratePainted({ name: this.meta.name || T("Editor.Unnamed"), current: this.meta.painted, controller }));
+  }
+
+  static async #onAiSketch() {
+    return this.#aiRun("sketch", (controller) => aiGenerateSketch({ name: this.meta.name || T("Editor.Unnamed"), painted: this.meta.painted, controller }));
   }
 
   static async #onExportWebm() {

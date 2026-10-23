@@ -218,5 +218,11 @@
   "SKETCHREVEAL.AIGen.PickPainted": "Malunek: {name}",
   "SKETCHREVEAL.AIGen.PickSketch": "Szkic: {name}",
   "SKETCHREVEAL.AIGen.TypePainted": "Malunek",
-  "SKETCHREVEAL.AIGen.TypeSketch": "Szkic z malunku"
+  "SKETCHREVEAL.AIGen.TypeSketch": "Szkic z malunku",
+  "SKETCHREVEAL.AIGen.TitleWorking": "AI Image Gen",
+  "SKETCHREVEAL.AIGen.Working": "Generuję obrazy… to może chwilę potrwać.",
+  "SKETCHREVEAL.AIGen.AspectUnknown": "Nie udało się odczytać rozmiaru obrazu, więc użyto domyślnych proporcji 3:2.",
+  "SKETCHREVEAL.AIGen.AppliedScene": "Okno zostało w międzyczasie zamknięte. Zapisano w scenie: {path}",
+  "SKETCHREVEAL.AIGen.AppliedPreset": "Edytor został w międzyczasie zamknięty. Zapisano w presecie: {path}",
+  "SKETCHREVEAL.AIGen.EditorClosed": "Edytor zamknięto przed zapisem presetu. Obraz zapisano w: {path}"
 }
