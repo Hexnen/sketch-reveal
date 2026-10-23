@@ -4,7 +4,7 @@ import { MODULE_ID } from "./config.mjs";
 import { RevealEditor } from "./apps.mjs";
 import { exportRevealWebm } from "./export-ui.mjs";
 import { playSplash } from "./play.mjs";
-import { listPresets, resolveScene, sceneBackground, sceneFlags } from "./store.mjs";
+import { getPreset, listPresets, resolveScene, sceneBackground, sceneFlags } from "./store.mjs";
 
 const TAB = "sketchreveal";
 const T = (k) => game.i18n.localize(`SKETCHREVEAL.${k}`);
@@ -14,7 +14,10 @@ function tabHtml(scene, active) {
   const f = sceneFlags(scene);
   const F = `flags.${MODULE_ID}`;
   const presets = listPresets();
-  const opts = [`<option value="">${esc(T("Scene.NoPreset"))}</option>`]
+  // preset usunięty/niedostępny: zaznacz osobną opcję, żeby zapis sceny nie wyczyścił po cichu powiązania
+  const missing = f.presetId && !getPreset(f.presetId)
+    ? [`<option value="${esc(f.presetId)}" selected>${esc(T("Scene.MissingPreset"))}: ${esc(f.presetId)}</option>`] : [];
+  const opts = [`<option value="">${esc(T("Scene.NoPreset"))}</option>`, ...missing]
     .concat(presets.map((p) => `<option value="${esc(p.id)}"${p.id === f.presetId ? " selected" : ""}>${esc(p.name)} (${esc(T(`Kind.${p.kind}`))})</option>`)).join("");
   const overrideCount = Object.keys(foundry.utils.flattenObject(f.override ?? {})).length;
   const bg = sceneBackground(scene);
@@ -74,7 +77,10 @@ export function onRenderSceneConfig(app, html) {
   const root = html instanceof HTMLElement ? html : html?.[0];
   if (!root || !game.user.isGM) return;
   const nav = root.querySelector("nav.sheet-tabs, nav.tabs");
-  if (!nav || root.querySelector(`.tab[data-tab="${TAB}"]`)) return;
+  if (!nav) return;
+  // pełny re-render podmienia nav (część `tabs`), a treść zakładki jest rodzeństwem części `misc` i przeżywa — zawsze
+  // usuń starą wersję i wstrzyknij od nowa ze świeżych flag (inaczej znika link, a zostaje nieaktualna treść)
+  root.querySelectorAll(`.sketch-reveal-tab, [data-tab="${TAB}"]`).forEach((el) => el.remove());
   const active = app.tabGroups?.sheet === TAB;
 
   const link = document.createElement("a");

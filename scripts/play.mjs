@@ -1,15 +1,18 @@
 /* Nakładki: splash (pełny ekran, modalny) i przejście sceny (nakładka nad płótnem, rozpływa się w żywą scenę).
-   Synchronizacja graczy (gniazdo `module.sketch-reveal`): splash dla wszystkich działa w dwóch krokach —
-   "prepare" (każdy klient ładuje obrazy i buduje efekt za zasłoną) → "ready" → GM czeka na wszystkich aktywnych
-   (albo na limit czasu) → "go" (wszyscy startują razem). */
+   Splash dla wszystkich: STAN idzie przez ustawienie świata `splashState` (zapis tylko GM — uwierzytelnione przez serwer),
+   odpowiedzi klientów (ready/phase) i diagnostyka (ping/pong) przez gniazdo `module.sketch-reveal`.
+   Dwa kroki: "prepare" (każdy klient ładuje obrazy i buduje efekt za zasłoną) → "ready" → GM czeka na wszystkich
+   aktywnych (albo na limit czasu) → "go" (wszyscy startują razem). */
 import { MODULE_ID, sanitizeConfig } from "./config.mjs";
 import { RevealPlayer } from "./player.mjs";
-import { clientPerf } from "./store.mjs";
+import { clientPerf, getPreset, presetPayload } from "./store.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SOCKET = `module.${MODULE_ID}`;
 const READY_TIMEOUT_MS = 90000; // zimna wektoryzacja szkicu (faza rysowania) potrafi trwać dziesiątki sekund; potem cache w IndexedDB
-let current = null; // { overlay, player, close() }
+const CLIENT_WAIT_MS = READY_TIMEOUT_MS + 20000; // klient czekający na „go” dłużej niż to zamyka splash sam (GM zniknął)
+let currentSplash = null;     // { overlay, player, close() }
+let currentTransition = null; // { overlay, player, close() }
 
 function makeOverlay(cls) {
   const o = document.createElement("div");
@@ -18,13 +21,19 @@ function makeOverlay(cls) {
   return o;
 }
 
-export function closeCurrent() { current?.close(); }
+/** Zamyka bieżący splash (przejście sceny zostaje). */
+function closeSplash() { currentSplash?.close(); }
+/** Zamyka wszystko, co moduł pokazuje (splash i przejście) — „Zamknij u wszystkich”. */
+export function closeCurrent() { currentSplash?.close(); currentTransition?.close(); cancelTransition(); }
 
 /* ---------------------------------------------------------------- preload */
 const warmed = new Set();
+const sameOrigin = (u) => { try { return typeof u === "string" && new URL(u, location.href).origin === location.origin; } catch { return false; } };
 /** Rozgrzej cache przeglądarki (pobierz + zdekoduj) — ciche, bez nakładki. */
 export async function preloadImages(urls) {
-  await Promise.all(urls.filter((u) => u && !warmed.has(u)).map(async (u) => {
+  // wiadomość z gniazda nie jest uwierzytelniona: tylko tablica stringów, adresy z tego samego źródła, najwyżej 8
+  if (!Array.isArray(urls)) return;
+  await Promise.all(urls.slice(0, 8).filter((u) => sameOrigin(u) && !warmed.has(u)).map(async (u) => {
     try {
       const img = new Image();
       img.decoding = "async";
@@ -41,17 +50,20 @@ export async function preloadImages(urls) {
  * przygotowanie skończone; `ready` → true/false (false = błąd, nakładka sama się zamyka).
  */
 export function stageSplash({ sketchUrl, paintedUrl, config, hints = null, hintsStrict = false }, onPhase = null) {
-  closeCurrent();
+  closeSplash();
   const cfg = sanitizeConfig(config);
   const overlay = makeOverlay("sr-splash sr-loading");
   const stage = document.createElement("div");
   stage.className = "sr-stage";
   const hint = document.createElement("span");
   hint.className = "sr-hint";
-  // gracze mogą pominąć/zamknąć splash tylko gdy preset na to pozwala (GM zawsze może)
-  const canSkip = game.user.isGM || !!cfg.playerSkip;
+  // gracze mogą pominąć/zamknąć splash tylko gdy preset na to pozwala (GM zawsze); gdy nie ma aktywnego GM-a
+  // (zniknął w trakcie), nikt nie zamknie splasha za nich — wtedy mogą go zamknąć sami
+  const canSkip = () => game.user.isGM || !!cfg.playerSkip || !game.users.activeGM;
   hint.textContent = game.i18n.localize("SKETCHREVEAL.Overlay.Hint");
-  if (!canSkip) { hint.hidden = true; overlay.style.cursor = "default"; }
+  const syncSkip = () => { const ok = canSkip(); hint.hidden = !ok; overlay.style.cursor = ok ? "pointer" : "default"; };
+  syncSkip();
+  const skipTimer = setInterval(syncSkip, 1000);
   const spin = document.createElement("span");
   spin.className = "sr-spinner";
   spin.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${game.i18n.localize("SKETCHREVEAL.Overlay.Loading")}`;
@@ -59,23 +71,27 @@ export function stageSplash({ sketchUrl, paintedUrl, config, hints = null, hints
   if (game.user.isGM) overlay.append(spin); // znaczek „Przygotowywanie…” tylko dla GM (gracze bez żadnych wskaźników)
   const player = new RevealPlayer({ container: stage, sketchUrl, paintedUrl, config: cfg, fit: "contain", perf: clientPerf(), hints, hintsStrict, onPhase });
   let closed = false, started = false;
-  const s = { overlay, player, close: null, start: null, ready: null };
+  const s = { overlay, player, close: null, start: null, ready: null, isStarted: () => started };
   const close = async () => {
     if (closed) return; closed = true;
     document.removeEventListener("keydown", onKey, true);
+    clearInterval(skipTimer);
     overlay.classList.add("sr-leaving");
     await sleep(350);
     player.dispose(); overlay.remove();
-    if (current === s) current = null;
+    if (currentSplash === s) currentSplash = null;
   };
-  const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); if (canSkip) close(); } };
+  const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); if (canSkip()) close(); } };
   document.addEventListener("keydown", onKey, true);
-  overlay.addEventListener("click", () => { if (!canSkip) return; if (started && player.playing) player.skip(); else if (started) close(); });
+  overlay.addEventListener("click", () => { if (!canSkip()) return; if (started && player.playing) player.skip(); else if (started) close(); });
   s.close = close;
   s.ready = player.prepare().then(() => !closed, (e) => {
-    console.error(`${MODULE_ID} | przygotowanie splasha`, e);
-    // gracze nie widzą żadnych powiadomień modułu — błąd tylko w konsoli (GM dostaje też powiadomienie)
-    if (game.user.isGM) ui.notifications.error(game.i18n.format("SKETCHREVEAL.Error.Play", { error: e?.message ?? e }));
+    // zamknięcie w trakcie przygotowania (Esc/„Zamknij u wszystkich”) powoduje odrzucenie — to nie błąd
+    if (!closed) {
+      console.error(`${MODULE_ID} | przygotowanie splasha`, e);
+      // gracze nie widzą żadnych powiadomień modułu — błąd tylko w konsoli (GM dostaje też powiadomienie)
+      if (game.user.isGM) ui.notifications.error(game.i18n.format("SKETCHREVEAL.Error.Play", { error: foundry.utils.escapeHTML(String(e?.message ?? e)) }));
+    }
     close();
     return false;
   });
@@ -88,7 +104,7 @@ export function stageSplash({ sketchUrl, paintedUrl, config, hints = null, hints
     if (closed) return;
     if (cfg.holdSec > 0) { await sleep(cfg.holdSec * 1000); if (!closed) await close(); }
   };
-  current = s;
+  currentSplash = s;
   return s;
 }
 
@@ -96,8 +112,23 @@ export function stageSplash({ sketchUrl, paintedUrl, config, hints = null, hints
 export function playSplash(payload) { return stageSplash(payload).start(); }
 
 /* ---------------------------------------------------------------- splash dla wszystkich (z barierą gotowości) */
+// Klienci rozwiązują preset lokalnie po `presetId` (stan świata), więc gracz nie wymusi splasha z własnym obrazem ani nie
+// zamknie cudzego. Podrobione „ready” z gniazda skraca najwyżej barierę GM-a (kosmetyka).
 const staged = new Map(); // id sesji → s (po stronie klienta)
-const runs = new Map();   // id sesji → { ready:Set, failed:Set, wake() } (po stronie GM)
+const runs = new Map();   // id sesji → { ready, failed, expected, wake() } (po stronie GM-inicjatora)
+
+export function registerSplashState() {
+  game.settings.register(MODULE_ID, "splashState", { scope: "world", config: false, type: Object, default: {}, onChange: (v) => onSplashState(v) });
+}
+
+function onSplashState(v) {
+  if (!v || typeof v.id !== "string") return;
+  if (v.phase === "prepare") {
+    const preset = getPreset(v.presetId);
+    if (preset) clientPrepare(v.id, presetPayload(preset));
+  } else if (v.phase === "go") clientGo(v.id);
+  else if (v.phase === "close") closeCurrent();
+}
 
 function clientPrepare(id, payload) {
   // fazy przygotowania lecą do GM (diagnostyka: na którym kroku klient stoi)
@@ -106,6 +137,8 @@ function clientPrepare(id, payload) {
     if (runs.has(id)) Hooks.callAll("sketchReveal.phase", msg); else game.socket.emit(SOCKET, msg); // inicjator = ten, kto ma `run`
   });
   staged.set(id, s);
+  // watchdog: GM zniknął w trakcie bariery → „go” nie przyjdzie; nie trzymaj gracza za zasłoną w nieskończoność
+  setTimeout(() => { if (staged.get(id) === s) { staged.delete(id); if (!s.isStarted()) s.close(); } }, CLIENT_WAIT_MS);
   s.ready.then((ok) => {
     const msg = { action: "ready", id, userId: game.user.id, ok };
     // inicjator (ma `run`) liczy siebie lokalnie; KAŻDY inny klient — także drugi GM — odpowiada przez gniazdo
@@ -119,7 +152,7 @@ function clientGo(id) {
 }
 function onReady({ id, userId, ok }) {
   const r = runs.get(id);
-  if (!r) return;
+  if (!r || typeof userId !== "string" || !r.expected.has(userId)) return;
   (ok ? r.ready : r.failed).add(userId);
   r.wake();
 }
@@ -145,6 +178,7 @@ export function createSyncHud(expected, run) {
       let icon = "fa-hourglass-half", cls = "wait", text;
       if (run.ready.has(u)) { icon = "fa-circle-check"; cls = "ok"; text = L("Sync.ReadyStatus"); }
       else if (run.failed.has(u)) { icon = "fa-circle-xmark"; cls = "bad"; text = L("Sync.FailedStatus"); }
+      else if (!game.users.get(u)?.active) { icon = "fa-plug-circle-xmark"; cls = "bad"; text = L("Sync.Left"); }
       else text = phases.has(u) ? phaseLabel(phases.get(u)) : L("Sync.NoReply");
       return `<li class="${cls}"><i class="fa-solid ${icon}"></i> <strong>${name}</strong> <span>${foundry.utils.escapeHTML(text)}</span></li>`;
     }).join("");
@@ -157,52 +191,65 @@ export function createSyncHud(expected, run) {
 }
 
 /**
- * GM: pokaż splash wszystkim aktywnym użytkownikom. Najpierw wszyscy przygotowują się za zasłoną; start dopiero,
- * gdy każdy zgłosi gotowość (albo po limicie czasu — wtedy ostrzeżenie, kogo zabrakło; spóźnieni startują, gdy skończą).
+ * GM: pokaż preset wszystkim aktywnym użytkownikom. Najpierw wszyscy przygotowują się za zasłoną; start dopiero,
+ * gdy każdy aktywny klient zgłosi gotowość (klienci, którzy w międzyczasie wypadną, nie blokują; limit czasu →
+ * ostrzeżenie, kogo zabrakło; spóźnieni startują, gdy skończą).
  */
-export async function showSplashToAll(payload) {
+export async function showSplashToAll(presetId) {
+  if (!game.user.isGM) return;
+  if (!getPreset(presetId)) return ui.notifications.warn(game.i18n.localize("SKETCHREVEAL.Macro.Missing"));
   const id = foundry.utils.randomID();
   const expected = new Set(game.users.filter((u) => u.active).map((u) => u.id));
-  const run = { ready: new Set(), failed: new Set(), wake: () => {} };
+  const run = { ready: new Set(), failed: new Set(), expected, wake: () => {} };
   runs.set(id, run);
-  const waiting = () => [...expected].filter((u) => !run.ready.has(u) && !run.failed.has(u));
+  // klient, który wypadł (zamknął kartę) w trakcie, przestaje być oczekiwany
+  const waiting = () => [...expected].filter((u) => game.users.get(u)?.active && !run.ready.has(u) && !run.failed.has(u));
   const allDone = new Promise((res) => { run.wake = () => { if (!waiting().length) res(true); }; });
-  game.socket.emit(SOCKET, { action: "prepare", id, payload });
-  clientPrepare(id, payload);
-  const hud = createSyncHud(expected, run);
-  const done = await Promise.race([allDone, sleep(READY_TIMEOUT_MS).then(() => false)]);
-  hud.dispose();
-  runs.delete(id);
-  if (!done) {
-    const names = waiting().map((u) => game.users.get(u)?.name ?? u).join(", ");
-    ui.notifications.warn(game.i18n.format("SKETCHREVEAL.Sync.Timeout", { names }));
+  let hud, ticker;
+  const state = (phase) => game.settings.set(MODULE_ID, "splashState", { id, presetId, phase, at: Date.now() });
+  try {
+    await state("prepare");
+    hud = createSyncHud(expected, run);
+    ticker = setInterval(() => run.wake(), 500);
+    const done = await Promise.race([allDone, sleep(READY_TIMEOUT_MS).then(() => false)]);
+    if (!done) {
+      const names = waiting().map((u) => foundry.utils.escapeHTML(game.users.get(u)?.name ?? u)).join(", ");
+      ui.notifications.warn(game.i18n.format("SKETCHREVEAL.Sync.Timeout", { names }));
+    }
+    const failed = [...run.failed].map((u) => game.users.get(u)?.name).filter(Boolean).map(foundry.utils.escapeHTML);
+    if (failed.length) ui.notifications.warn(game.i18n.format("SKETCHREVEAL.Sync.Failed", { names: failed.join(", ") }));
+    await state("go");
+  } catch (e) {
+    console.error(`${MODULE_ID} | pokaż wszystkim`, e);
+    try { await state("close"); } catch { /* */ } // nie zostawiaj klientów za zasłoną po wyjątku
+    throw e;
+  } finally {
+    clearInterval(ticker); hud?.dispose(); runs.delete(id);
   }
-  const failed = [...run.failed].map((u) => game.users.get(u)?.name).filter(Boolean);
-  if (failed.length) ui.notifications.warn(game.i18n.format("SKETCHREVEAL.Sync.Failed", { names: failed.join(", ") }));
-  game.socket.emit(SOCKET, { action: "go", id });
-  clientGo(id);
 }
 
-/** GM: poproś wszystkich klientów o wstępne załadowanie obrazów presetu (cache), bez pokazywania czegokolwiek. */
+/** GM: poproś wszystkich klientów o wstępne załadowanie obrazów (cache), bez pokazywania czegokolwiek. */
 export function preloadForAll(urls) {
   game.socket.emit(SOCKET, { action: "preload", urls });
   return preloadImages(urls);
 }
 
-export function broadcastClose() { game.socket.emit(SOCKET, { action: "close" }); closeCurrent(); }
+/** GM: zamknij splash (i przejście) u wszystkich — przez stan świata (tylko GM może zapisać). */
+export function broadcastClose() {
+  closeCurrent();
+  return game.settings.set(MODULE_ID, "splashState", { id: foundry.utils.randomID(), phase: "close", at: Date.now() });
+}
 
 export function registerSocket() {
   game.socket.on(SOCKET, (msg) => {
-    switch (msg?.action) {
-      case "prepare": clientPrepare(msg.id, msg.payload); break;
-      case "go": clientGo(msg.id); break;
-      case "ready": if (runs.has(msg.id)) onReady(msg); break;
-      case "preload": preloadImages(msg.urls ?? []); break;
-      case "close": closeCurrent(); break;
+    if (!msg || typeof msg !== "object") return;
+    switch (msg.action) {
+      case "ready": if (typeof msg.id === "string" && runs.has(msg.id)) onReady(msg); break;
+      case "preload": preloadImages(msg.urls); break;
       // diagnostyka: każdy klient z modułem odpowiada (GM widzi, kto odbiera gniazdo)
       case "ping": game.socket.emit(SOCKET, { action: "pong", userId: game.user.id, visible: document.visibilityState }); break;
       case "pong": Hooks.callAll("sketchReveal.pong", msg); break;
-      case "phase": if (runs.has(msg.id)) Hooks.callAll("sketchReveal.phase", msg); break;
+      case "phase": if (typeof msg.id === "string" && runs.has(msg.id)) Hooks.callAll("sketchReveal.phase", msg); break;
     }
   });
 }
@@ -224,7 +271,7 @@ export function armTransition(resolved) {
   overlay.append(stage);
   const player = new RevealPlayer({ container: stage, sketchUrl: resolved.sketchUrl, paintedUrl: resolved.paintedUrl, config: cfg, fit: "cover", perf: clientPerf(), hints: resolved.hints, hintsStrict: resolved.hintsStrict });
   let cancelled = false;
-  const ready = player.prepare().then(() => !cancelled, (e) => { console.error(`${MODULE_ID} | przygotowanie przejścia`, e); return false; });
+  const ready = player.prepare().then(() => !cancelled, (e) => { if (!cancelled) console.error(`${MODULE_ID} | przygotowanie przejścia`, e); return false; });
   const t = { overlay, player, ready, cfg, cancel() { cancelled = true; clearTimeout(t.guard); player.dispose(); overlay.remove(); if (pending === t) pending = null; } };
   pending = t;
   // zabezpieczenie: nie zostawiaj zasłony na zawsze (np. scena nie dojechała do canvasReady)
@@ -248,16 +295,18 @@ export async function runTransition() {
     player.setTitleExit(0);
     await sleep(Math.max(60, cfg.fadeSec * 1000));
     player.dispose(); overlay.remove();
-    if (current?.overlay === overlay) current = null;
+    if (currentTransition?.overlay === overlay) currentTransition = null;
     if (pending === t) pending = null;
   };
-  const canSkip = game.user.isGM || !!cfg.playerSkip;
-  const onKey = (e) => { if (e.key === "Escape" && canSkip) close(); };
+  const canSkip = () => game.user.isGM || !!cfg.playerSkip || !game.users.activeGM;
+  const onKey = (e) => { if (e.key === "Escape" && canSkip()) close(); };
   document.addEventListener("keydown", onKey, true);
-  if (canSkip) overlay.addEventListener("click", () => { if (player.playing) player.skip(); else close(); });
-  current = { overlay, player, close };
+  overlay.addEventListener("click", () => { if (!canSkip()) return; if (player.playing) player.skip(); else close(); });
+  currentTransition = { overlay, player, close };
   try {
-    if (!(await t.ready)) { await close(); return; } // błąd przygotowania → bez efektu, scena żywa
+    // po canvasReady straż 45 s już nie działa — własny limit, żeby zawieszone przygotowanie nie zostawiło zasłony na zawsze
+    if (!(await Promise.race([t.ready, sleep(READY_TIMEOUT_MS).then(() => false)]))) { await close(); return; } // błąd/limit → bez efektu, scena żywa
+    if (closed) return;
     overlay.classList.add("sr-ready");
     await player.play();
     if (!closed) { if (cfg.holdSec > 0) await sleep(Math.min(cfg.holdSec, 1.5) * 1000); await close(); }

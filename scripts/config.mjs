@@ -88,7 +88,17 @@ export function sanitizeConfig(raw) {
   if (isObj(raw.sway)) c.sway = sanitizeSway(raw.sway);
   if (typeof raw.residue === "number") c.residue = sanitizeResidue(raw.residue);
   if (isObj(raw.title)) c.title = sanitizeTitle(raw.title);
-  if (isObj(raw.glow)) c.glow = sanitizeGlow(raw.glow);
+  if (isObj(raw.glow)) {
+    c.glow = sanitizeGlow(raw.glow);
+    // klucze wykrywania równe domyślnym nie są nadpisaniem (formularz zawsze wysyła wszystkie 9) — usuń je, a pusty blok całkiem;
+    // bez tego zapis sceny/presetu zamrażał by wartości domyślne i tworzył „fantomowe” nadpisania
+    const det = c.glow.params?.detect;
+    if (det) {
+      const kept = Object.fromEntries(Object.entries(det).filter(([k, v]) => v !== Core.GLOW_DETECT_DEFAULTS[k]));
+      c.glow = { ...c.glow, params: { ...c.glow.params } };
+      if (Object.keys(kept).length) c.glow.params.detect = kept; else delete c.glow.params.detect;
+    }
+  }
   if (typeof raw.holdSec === "number" && Number.isFinite(raw.holdSec)) c.holdSec = clamp(raw.holdSec, 0, 60);
   if (typeof raw.playerSkip === "boolean") c.playerSkip = raw.playerSkip;
   if (typeof raw.fadeSec === "number" && Number.isFinite(raw.fadeSec)) c.fadeSec = clamp(raw.fadeSec, 0, 10);

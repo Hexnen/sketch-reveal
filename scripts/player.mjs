@@ -86,7 +86,8 @@ export class RevealPlayer {
     this.perfBase = sanitizePerf(perf ?? DEFAULT_PERF);
     this.perf = this.perfBase;
     this.progress = 0; this.playing = false; this.disposed = false; this._raf = 0; this._over = 0;
-    this._owned = []; this._done = null; this._side = -1; this._lastM = null; this._liveLast = 0; this._loopOn = false;
+    this._owned = { disposed: false, urls: [], push(u) { if (this.disposed) URL.revokeObjectURL(u); else this.urls.push(u); } };
+    this._gen = 0; this._done = null; this._side = -1; this._lastM = null; this._liveLast = 0; this._loopOn = false;
     this.meter = createFpsMeter();
     this.finished = new Promise((res) => { this._done = res; });
     this._buildDom();
@@ -123,6 +124,7 @@ export class RevealPlayer {
     this._ph("images-loaded");
     if (this.disposed) return;
     const [sketch, painted] = await Promise.all([fitImage(s0, this._owned), fitImage(p0, this._owned)]);
+    if (this.disposed) return;
     this.W = painted.naturalWidth; this.H = painted.naturalHeight;
     // szkic o innym rozmiarze niż malunek: rdzeń zakłada ten sam rozmiar → przeskaluj szkic na rozmiar malunku
     if (sketch.naturalWidth === this.W && sketch.naturalHeight === this.H) this.sketch = sketch;
@@ -131,27 +133,17 @@ export class RevealPlayer {
       c.width = this.W; c.height = this.H;
       c.getContext("2d").drawImage(sketch, 0, 0, this.W, this.H);
       this.sketch = await canvasToImage(c, this._owned);
+      if (this.disposed) return;
     }
     this.painted = painted;
     this._ph("images-fitted");
     this._layout();
 
-    // oś czasu
-    const intro = cfg.intro, glow = sanitizeGlow(cfg.glow ?? GLOW_DEFAULT_OPTS);
-    this.glowOpts = glow;
-    this.sec = intro.enabled ? Math.max(0.2, intro.seconds) : 0;
-    this.colorAt = Math.max(0, Math.min(100, intro.colorAt ?? 100)) / 100;
-    this.overlap = this.sec > 0 && this.colorAt < 1;
-    this.cs = this.sec * this.colorAt;
-    const params = effectParamsOf(cfg);
-    this.effectDur = typeof params.duration === "number" ? params.duration : 6;
-    this.glowSec = glow.enabled ? Math.max(0.1, glow.params.duration) : 0;
-    this.glowStart = this.cs + this.effectDur * Math.max(0, Math.min(100, glow.from ?? 100)) / 100;
-    this.total = this.glowSec > 0 ? Math.max(this.sec, this.cs + this.effectDur, this.glowStart + this.glowSec) : Math.max(this.sec, this.cs + this.effectDur);
-
     this.aspect = this.W / this.H;
     this.camera = { zoom: cfg.zoom, sway: cfg.sway };
-    this.title = createTitle({ host: this.container, opts: cfg.title, lite: this.perf.liteTitle });
+    // napis w ramce obrazu (jak w oryginale): rozmiar liter liczony od szerokości obrazu, nie okna; eksport składa go tak samo
+    this.title = createTitle({ host: this.frame, opts: cfg.title, lite: this.perf.liteTitle });
+    this._timeline();
     this.cameraCtl = createCamera({ el: this.cam, camera: this.camera, total: this.total, aspect: this.aspect });
 
     this._ph("title-camera-ready");
@@ -162,9 +154,33 @@ export class RevealPlayer {
     // znaczniki wydajności
     if (this.perfBase.fpsMeter) this.fpsBadge = createFpsBadge(this.container, this.meter, this.perfBase.fpsLimit);
     if (this.perfBase.autoQuality) {
-      this.auto = createAutoQuality({ host: this.container, meter: this.meter, perf: this.perfBase, onChange: (p) => this.setPerf(p) });
+      this.auto = createAutoQuality({ host: this.container, meter: this.meter, perf: this.perfBase, onChange: (p) => { this.setPerf(p).catch((e) => console.warn("sketch-reveal | setPerf", e)); } });
     }
     this._apply(0);
+  }
+
+  /**
+   * Oś czasu: [faza szkicu][kolor][rozbłysk] + ogon napisu (animacje wejścia/zaniku napisu muszą się zmieścić na osi,
+   * inaczej przy domyślnych ustawieniach zanik nigdy by się nie odegrał). Wołana też po awarii fazy szkicu.
+   */
+  _timeline() {
+    const cfg = this.cfg, intro = cfg.intro, glow = this.glowOpts = sanitizeGlow(cfg.glow ?? GLOW_DEFAULT_OPTS);
+    const useIntro = intro.enabled && !this._introFailed;
+    this.sec = useIntro ? Math.max(0.2, intro.seconds) : 0;
+    this.colorAt = Math.max(0, Math.min(100, intro.colorAt ?? 100)) / 100;
+    this.overlap = this.sec > 0 && this.colorAt < 1;
+    this.cs = this.sec * this.colorAt;
+    const params = effectParamsOf(cfg);
+    this.effectDur = typeof params.duration === "number" ? params.duration : 6;
+    this.glowSec = glow.enabled ? Math.max(0.1, glow.params.duration) : 0;
+    this.glowStart = this.cs + this.effectDur * Math.max(0, Math.min(100, glow.from ?? 100)) / 100;
+    let total = this.glowSec > 0 ? Math.max(this.sec, this.cs + this.effectDur, this.glowStart + this.glowSec) : Math.max(this.sec, this.cs + this.effectDur);
+    // napis pojawia się w chwili appearAt × oś bazowa (jak dotąd), a jego własny zegar trwa D s — oś dostaje ogon, żeby zanik
+    // zdążył się odegrać (najwyżej +25 s). Opcje napisu dostają appearAt przeliczony na dłuższą oś, więc moment startu się nie zmienia.
+    const base = total, D = cfg.title.enabled ? this.title?.duration?.() ?? 0 : 0;
+    if (D > 0) total = Math.max(base, Math.min(cfg.title.appearAt * base + D, base + 25));
+    this.total = total;
+    if (this.title) this.title.setOpts({ ...cfg.title, appearAt: Math.min(0.95, (cfg.title.appearAt * base) / total) });
   }
 
   /* ---- rozdzielczość podglądu */
@@ -195,8 +211,10 @@ export class RevealPlayer {
 
   /** (Re)buduje efekt, ślad szkicu, rozbłysk i nakładkę szkicu na kopii obrazów o boku `side` (0 = pełne). */
   async _buildLayers(side) {
+    const gen = ++this._gen; // nowsza przebudowa (auto-jakość) unieważnia starszą: po każdym await `stale()` → wyjście
+    const stale = () => this.disposed || gen !== this._gen;
     const cfg = this.cfg, { sketch, painted, scale } = await this._scaledImages(side);
-    if (this.disposed) return;
+    if (stale()) return;
     this._teardownLayers();
     this._side = side;
     const sw = (p) => (typeof p.paperScale === "number" ? { ...p, paperScale: p.paperScale * scale } : p); // ziarno papieru w uv jak w oryginale
@@ -209,6 +227,7 @@ export class RevealPlayer {
     this.effectCanvas.width = painted.naturalWidth; this.effectCanvas.height = painted.naturalHeight;
     this.effect = Core.getEffect(cfg.effectId).create(this.effectCanvas);
     const effSketch = this.overlap ? await blankImage(painted.naturalWidth, painted.naturalHeight, this._owned) : sketch;
+    if (stale()) return; // warstwy tej przebudowy sprzątnie nowsza (albo dispose)
     this.effect.setImages(effSketch, painted);
     this.effect.setParams(sw(params));
     this._ph("effect-created");
@@ -241,7 +260,12 @@ export class RevealPlayer {
       } catch (e) {
         console.warn("sketch-reveal | faza szkicu niedostępna, pomijam", e);
         this.intro = null; this.introCanvas.remove(); this.introCanvas = null;
-        this.sec = 0; this.overlap = false; this.cs = 0;
+        // bez fazy szkicu przelicz CAŁĄ oś (total, glowStart, kamera); w trybie nakładania efekt dostał biały arkusz — wróć do prawdziwego szkicu
+        const wasOverlap = this.overlap;
+        this._introFailed = true;
+        this._timeline();
+        this.cameraCtl?.set?.({ total: this.total });
+        if (wasOverlap) this.effect.setImages(sketch, painted);
       }
     }
     this._isolate();
@@ -252,7 +276,6 @@ export class RevealPlayer {
     if (this.intro?.isReady?.() === false) waits.push(this.intro.whenReady?.().catch(() => {}));
     if (this.glow) waits.push(this.glow.whenReady());
     await Promise.all(waits);
-    this._glowSeen = false;
   }
 
   _isolate() {
@@ -281,14 +304,16 @@ export class RevealPlayer {
     this.title?.setLite(perf.liteTitle);
     if (perf.fpsLimit !== this._gateLimit) { this._gateLimit = perf.fpsLimit; this._gate = createFrameGate(perf.fpsLimit); }
     const side = await this._side_for(perf);
-    if (side !== this._side && !this.disposed) { await this._buildLayers(side); this._apply(this.progress); }
+    if (side !== this._side && !this.disposed) {
+      try { await this._buildLayers(side); this._lastP = NaN; this._apply(this.progress); } catch (e) { console.warn("sketch-reveal | przebudowa warstw", e); }
+    }
   }
 
   /* ---- oś czasu */
   _at(p) {
     const { sec, cs, effectDur, total, overlap, glowSec, glowStart } = this;
     const t = p * total;
-    const effectProgress = sec > 0 ? Math.max(0, Math.min(1, (t - cs) / effectDur)) : glowSec > 0 ? Math.min(1, t / effectDur) : p;
+    const effectProgress = Math.max(0, Math.min(1, (t - cs) / effectDur)); // cs = 0 bez fazy szkicu
     const introProgress = sec > 0 ? Math.min(1, t / sec) : 1;
     const introOpacity = overlap ? 1 - smooth(0.55, 0.95, effectProgress) : 1;
     const introVisible = sec > 0 && (overlap ? introOpacity > 0.001 : t < sec);
@@ -392,7 +417,8 @@ export class RevealPlayer {
     try { this.auto?.dispose(); this.fpsBadge?.dispose(); } catch { /* */ }
     try { this.title?.dispose(); this.cameraCtl?.dispose(); } catch { /* */ }
     this._teardownLayers();
-    for (const u of this._owned) URL.revokeObjectURL(u);
+    this._owned.disposed = true;
+    for (const u of this._owned.urls) URL.revokeObjectURL(u);
     this.frame.remove();
     this._done?.();
   }

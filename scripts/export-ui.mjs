@@ -7,6 +7,7 @@ import { RevealPlayer } from "./player.mjs";
 const T = (k, d) => (d ? game.i18n.format(`SKETCHREVEAL.${k}`, d) : game.i18n.localize(`SKETCHREVEAL.${k}`));
 const esc = (s) => foundry.utils.escapeHTML(String(s ?? ""));
 const KEY = "export-options";
+let exporting = false; // jeden eksport naraz: eksport owija prototypy WebGL (współbieżne owijki zostawiałyby spowolnienie do przeładowania)
 
 function loadOpts() {
   try { return { ...X.DEFAULT_EXPORT, ...JSON.parse(localStorage.getItem(`${MODULE_ID}.${KEY}`) || "{}") }; } catch { return { ...X.DEFAULT_EXPORT }; }
@@ -38,10 +39,12 @@ async function askOptions() {
  * @param {{sketchUrl:string, paintedUrl:string, config:object, hints?:object[]|null, hintsStrict?:boolean, name?:string}} payload
  */
 export async function exportRevealWebm(payload) {
+  if (exporting) return ui.notifications.warn(T("Export.Busy"));
   if (!X.supported()) return ui.notifications.error(T("Export.Unsupported"));
   if (!payload.sketchUrl || !payload.paintedUrl) return ui.notifications.warn(T("Editor.NeedImages"));
   const opts = await askOptions();
   if (!opts) return;
+  exporting = true;
 
   // niewidoczny odtwarzacz o rozmiarze obrazu (układ ramki wymaga rozmiaru kontenera)
   const host = document.createElement("div");
@@ -57,13 +60,16 @@ export async function exportRevealWebm(payload) {
   overlay.querySelector("button").addEventListener("click", () => ac.abort());
   overlay.style.cursor = "default";
 
-  const player = new RevealPlayer({
-    container: host, sketchUrl: payload.sketchUrl, paintedUrl: payload.paintedUrl, config: sanitizeConfig(payload.config),
-    fit: "contain", hints: payload.hints ?? null, hintsStrict: !!payload.hintsStrict,
-  });
+  let player = null;
   try {
+    player = new RevealPlayer({
+      container: host, sketchUrl: payload.sketchUrl, paintedUrl: payload.paintedUrl, config: sanitizeConfig(payload.config),
+      fit: "contain", hints: payload.hints ?? null, hintsStrict: !!payload.hintsStrict,
+    });
     pct.textContent = T("Export.Preparing");
-    await player.prepare();
+    // „Anuluj” działa także w czasie przygotowania (zimna wektoryzacja szkicu potrafi trwać dziesiątki sekund)
+    const aborted = new Promise((_, rej) => ac.signal.addEventListener("abort", () => rej(new DOMException("Aborted", "AbortError")), { once: true }));
+    await Promise.race([player.prepare(), aborted]);
     const blob = await X.exportWebm({
       player, options: opts, signal: ac.signal,
       onProgress: (f) => { bar.value = f; pct.textContent = `${Math.round(f * 100)}%`; },
@@ -73,8 +79,9 @@ export async function exportRevealWebm(payload) {
     ui.notifications.info(T("Export.Done", { size: (blob.size / 1048576).toFixed(1) }));
   } catch (e) {
     if (e?.name === "AbortError") ui.notifications.info(T("Export.Cancelled"));
-    else { console.error(`${MODULE_ID} | eksport`, e); ui.notifications.error(T("Export.Failed", { error: e?.message ?? e })); }
+    else { console.error(`${MODULE_ID} | eksport`, e); ui.notifications.error(T("Export.Failed", { error: esc(String(e?.message ?? e)) })); }
   } finally {
-    player.dispose(); host.remove(); overlay.remove();
+    player?.dispose(); host.remove(); overlay.remove();
+    exporting = false;
   }
 }

@@ -4,23 +4,22 @@ import { exportRevealWebm } from "./export-ui.mjs";
 import { applyShowIf, configFormHtml, readForm } from "./form.mjs";
 import { broadcastClose, playSplash, preloadForAll, showSplashToAll } from "./play.mjs";
 import { detectLightHints } from "./fx/ai-hints.mjs";
-import { BUILTIN_PRESETS, deletePreset, getPreset, listPresets, resolveScene, savePreset } from "./store.mjs";
+import { BUILTIN_PRESETS, deletePreset, getPreset, listPresets, presetPayload, sceneBackground, sceneFlags, savePreset } from "./store.mjs";
+import { EFFECTS } from "../vendor/reveal-core.js";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 const T = (k, d) => (d ? game.i18n.format(`SKETCHREVEAL.${k}`, d) : game.i18n.localize(`SKETCHREVEAL.${k}`));
+/** T dla powiadomień: powiadomienia Foundry wstawiają tekst jako HTML, więc wartości tekstowe (nazwy z importu, błędy) escapujemy. */
+const TE = (k, d) => T(k, Object.fromEntries(Object.entries(d).map(([n, v]) => [n, typeof v === "string" ? foundry.utils.escapeHTML(v) : v])));
 
 /** Ładunek dla odtwarzacza z presetu (obrazy + konfiguracja). */
-export function payloadOf(preset, config = preset.config) {
-  return { sketchUrl: preset.sketch, paintedUrl: preset.painted, config: sanitizeConfig(config), name: preset.name,
-    hints: preset.hints?.length ? preset.hints : null, hintsStrict: !!preset.hintsStrict };
-}
+export const payloadOf = presetPayload;
 
-/** Pokaż preset wszystkim (używane przez makra z paska). Tylko GM. */
+/** Pokaż preset wszystkim (używane przez makra z paska). Tylko GM; gracz nie dostaje żadnych powiadomień modułu. */
 export function showPresetToAll(presetId) {
-  const p = getPreset(presetId);
-  if (!game.user.isGM) return ui.notifications.warn(T("Macro.GMOnly"));
-  if (!p) return ui.notifications.warn(T("Macro.Missing"));
-  return showSplashToAll(payloadOf(p));
+  if (!game.user.isGM) return console.warn(`${MODULE_ID} | tylko GM może pokazać splash wszystkim`);
+  if (!getPreset(presetId)) return ui.notifications.warn(T("Macro.Missing"));
+  return showSplashToAll(presetId);
 }
 
 /**
@@ -65,7 +64,7 @@ game.modules.get("${MODULE_ID}").api.showToAll(${JSON.stringify(presetId)});`,
     });
   }
   if (slot !== undefined && slot !== null) await game.user.assignHotbarMacro(macro, slot);
-  if (slot !== undefined && slot !== null) ui.notifications.info(T("Macro.Created", { name: p.name }));
+  if (slot !== undefined && slot !== null) ui.notifications.info(TE("Macro.Created", { name: p.name }));
   return macro;
 }
 
@@ -92,10 +91,11 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     super(options);
     this.scene = scene ?? null;
     if (scene) {
-      const r = resolveScene(scene) ?? null;
-      this.base = r ? sanitizeConfig(r.preset.config) : defaultConfig();
-      this.cfg = r ? r.config : defaultConfig();
-      this.meta = { name: scene.name, kind: "transition", sketch: r?.sketchUrl ?? "", painted: r?.paintedUrl ?? "" };
+      // bazą jest konfiguracja presetu NIEZALEŻNIE od „włączone”/obrazów (inaczej edycja wyłączonej sceny kasowałaby nadpisania)
+      const f = sceneFlags(scene), preset = getPreset(f.presetId);
+      this.base = preset ? sanitizeConfig(preset.config) : defaultConfig();
+      this.cfg = sanitizeConfig(deepMerge(this.base, f.override ?? {}));
+      this.meta = { name: scene.name, kind: "transition", sketch: f.sketch || preset?.sketch || "", painted: f.painted || preset?.painted || sceneBackground(scene) };
     } else {
       const p = preset ?? { name: "", kind: "splash", sketch: "", painted: "", config: defaultConfig() };
       this.presetId = p.id ?? null;
@@ -132,6 +132,7 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   async _aiDetect() {
+    this._collect(); // bieżący obraz malowany z pola formularza (nie ten sprzed zmiany)
     const key = game.settings.get(MODULE_ID, "openrouterKey");
     if (!key?.trim()) return ui.notifications.warn(T("AI.NoKey"));
     if (!this.meta.painted) return ui.notifications.warn(T("AI.NeedPainted"));
@@ -143,7 +144,7 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       this.hints = r.hints;
       ui.notifications.info(T("AI.Done", { n: r.hints.length, cost: r.cost.toFixed(4) }));
     } catch (e) {
-      ui.notifications.error(T("AI.Failed", { error: e?.message ?? e }));
+      ui.notifications.error(TE("AI.Failed", { error: String(e?.message ?? e) }));
     }
     this._collect(); this.render();
   }
@@ -153,6 +154,8 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     const form = this.element;
     if (!form) return;
     const data = readForm(form);
+    // podpowiedzi AI dotyczą konkretnego obrazu malowanego — po jego zmianie są nieaktualne
+    if (data.meta?.painted !== undefined && !this.scene && data.meta.painted !== this.meta.painted) this.hints = [];
     if (data.meta) this.meta = { ...this.meta, ...data.meta };
     const { meta, hintsStrict, ...rest } = data;
     void meta;
@@ -184,7 +187,17 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
   static async #onSubmit(event, form, formData) {
     this._collect();
     if (this.scene) {
-      const diff = foundry.utils.diffObject(this.base, this.cfg);
+      // parametry efektu są w configu „rzadkie” (bez wartości domyślnych) — diff na rzadkich blokach nie umiałby cofnąć
+      // parametru do domyślnej; porównujemy więc postać gęstą (defaultParams + zmiany)
+      const dense = (c) => {
+        const o = foundry.utils.deepClone(c);
+        for (const id of new Set([...Object.keys(this.base.effectParams), ...Object.keys(this.cfg.effectParams), this.cfg.effectId, this.base.effectId])) {
+          const eff = EFFECTS.find((e) => e.id === id);
+          if (eff) o.effectParams[id] = { ...eff.defaultParams, ...(c.effectParams[id] ?? {}) };
+        }
+        return o;
+      };
+      const diff = foundry.utils.diffObject(dense(this.base), dense(this.cfg));
       const key = `flags.${MODULE_ID}`;
       await this.scene.update({ [`${key}.-=override`]: null });
       if (!foundry.utils.isEmpty(diff)) await this.scene.update({ [`${key}.override`]: diff });
@@ -284,13 +297,13 @@ export class RevealManager extends HandlebarsApplicationMixin(ApplicationV2) {
   }
   static async #onPlayAll(event, target) {
     const p = RevealManager.#preset(target);
-    if (p) showSplashToAll(payloadOf(p));
+    if (p) showSplashToAll(p.id);
   }
   static async #onPreload(event, target) {
     const p = RevealManager.#preset(target);
     if (!p) return;
     await preloadForAll([p.sketch, p.painted]);
-    ui.notifications.info(T("Manager.Preloaded", { name: p.name }));
+    ui.notifications.info(TE("Manager.Preloaded", { name: p.name }));
   }
   static async #onCloseAll() { broadcastClose(); }
 
@@ -318,10 +331,14 @@ export class RevealManager extends HandlebarsApplicationMixin(ApplicationV2) {
       try {
         const raw = JSON.parse(await file.text());
         if (!raw || typeof raw !== "object" || raw.module !== MODULE_ID) throw new Error(T("Manager.ImportBad"));
-        const p = await savePreset({ name: raw.name, kind: raw.kind, sketch: raw.sketch, painted: raw.painted, config: raw.config, hints: raw.hints });
-        ui.notifications.info(T("Manager.Imported", { name: p.name }));
+        // ścieżki obrazów z obcego pliku: tylko względne (bez schematu i //) — inaczej każdy klient pobierałby cudzy URL (wyciek IP)
+        const local = (u) => (typeof u === "string" && !/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(u.trim()) ? u.trim() : "");
+        const sketch = local(raw.sketch), painted = local(raw.painted);
+        const p = await savePreset({ name: raw.name, kind: raw.kind, sketch, painted, config: raw.config, hints: raw.hints, hintsStrict: raw.hintsStrict });
+        ui.notifications.info(TE("Manager.Imported", { name: p.name }));
+        if ((raw.sketch && !sketch) || (raw.painted && !painted)) ui.notifications.warn(T("Manager.ImportUrls"));
         this.render();
-      } catch (e) { ui.notifications.error(T("Manager.ImportFailed", { error: e?.message ?? e })); }
+      } catch (e) { ui.notifications.error(TE("Manager.ImportFailed", { error: String(e?.message ?? e) })); }
     });
     input.click();
   }

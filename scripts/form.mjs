@@ -116,9 +116,9 @@ export function configFormHtml(cfg, extraSections = "") {
     ${extraSections}
   </fieldset>
   <fieldset><legend>${L("Section.Ending")}</legend>
-    ${group(L("Field.HoldSec"), slider("holdSec", cfg.holdSec, 0, 20, 0.5), L("Hint.Hold"))}
+    ${group(L("Field.HoldSec"), slider("holdSec", cfg.holdSec, 0, 60, 0.5), L("Hint.Hold"))}
     ${group(L("Field.PlayerSkip"), check("playerSkip", cfg.playerSkip), L("Hint.PlayerSkip"))}
-    ${group(L("Field.FadeSec"), slider("fadeSec", cfg.fadeSec, 0, 6, 0.1), L("Hint.Fade"))}
+    ${group(L("Field.FadeSec"), slider("fadeSec", cfg.fadeSec, 0, 10, 0.1), L("Hint.Fade"))}
   </fieldset>`;
 }
 

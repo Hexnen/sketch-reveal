@@ -1,4 +1,5 @@
 /* Magazyn: presety (ustawienie świata + wbudowane przykłady) i konfiguracja per scena (flagi sceny). */
+import { LIGHT_HINT_KINDS } from "../vendor/reveal-core.js";
 import { MODULE_ID, defaultConfig, deepMerge, sanitizeConfig } from "./config.mjs";
 
 const SAMPLES = `modules/${MODULE_ID}/samples`;
@@ -28,17 +29,49 @@ export function listPresets() {
 }
 
 export function getPreset(id) {
-  return BUILTIN_PRESETS.find((p) => p.id === id) ?? userPresets()[id] ?? null;
+  if (typeof id !== "string") return null;
+  const mine = userPresets();
+  // hasOwn: id typu "constructor"/"__proto__" (np. z flagi obcej sceny) nie może zwrócić prototypu obiektu
+  return BUILTIN_PRESETS.find((p) => p.id === id) ?? (Object.hasOwn(mine, id) ? mine[id] : null);
+}
+
+/** Ładunek dla odtwarzacza z presetu (obrazy + konfiguracja + podpowiedzi AI). */
+export function presetPayload(preset, config = preset.config) {
+  return { sketchUrl: preset.sketch, paintedUrl: preset.painted, config: sanitizeConfig(config), name: preset.name,
+    hints: preset.hints?.length ? preset.hints : null, hintsStrict: !!preset.hintsStrict };
+}
+
+const str = (v, max = 500) => (typeof v === "string" ? v.slice(0, max) : "");
+const unit = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
+
+/**
+ * Walidacja już znormalizowanych podpowiedzi świateł (LightHint[]): zły kształt/zakres odpada, najwyżej MAX_HINTS.
+ * Import z pliku nie może wsadzić do presetu wpisów, które wywaliłyby fazę rozbłysku u wszystkich.
+ */
+export function validHints(arr) {
+  if (!Array.isArray(arr)) return [];
+  const out = [];
+  for (const h of arr) {
+    if (!h || typeof h !== "object" || !LIGHT_HINT_KINDS.includes(h.kind)) continue;
+    if (!unit(h.x) || !unit(h.y) || typeof h.r !== "number" || !(h.r >= 0.003 && h.r <= 0.5)) continue;
+    if (!Array.isArray(h.color) || h.color.length !== 3 || !h.color.every(unit) || !unit(h.intensity) || !unit(h.confidence)) continue;
+    const e = { kind: h.kind, x: h.x, y: h.y, r: h.r, color: [...h.color], intensity: h.intensity, confidence: h.confidence };
+    if (unit(h.flicker)) e.flicker = h.flicker;
+    if (typeof h.label === "string") e.label = h.label.slice(0, 60);
+    out.push(e);
+    if (out.length >= 48) break;
+  }
+  return out;
 }
 
 export async function savePreset(p) {
   if (!game.user.isGM) throw new Error("GM only");
   const all = userPresets();
-  const id = p.id && !p.id.startsWith("builtin-") ? p.id : foundry.utils.randomID();
-  all[id] = { id, name: p.name || "Reveal", kind: p.kind === "transition" ? "transition" : "splash",
-    sketch: p.sketch || "", painted: p.painted || "", config: sanitizeConfig(p.config),
-    // podpowiedzi świateł z AI (zwalidowane LightHint[]; wykrywa GM w edytorze, gracze tylko je czytają)
-    hints: Array.isArray(p.hints) ? p.hints : [], hintsStrict: !!p.hintsStrict };
+  const id = typeof p.id === "string" && p.id && !p.id.startsWith("builtin-") && Object.hasOwn(all, p.id) ? p.id : foundry.utils.randomID();
+  all[id] = { id, name: str(p.name, 120).trim() || "Reveal", kind: p.kind === "transition" ? "transition" : "splash",
+    sketch: str(p.sketch), painted: str(p.painted), config: sanitizeConfig(p.config),
+    // podpowiedzi świateł z AI (wykrywa GM w edytorze, gracze tylko je czytają)
+    hints: validHints(p.hints), hintsStrict: !!p.hintsStrict };
   await game.settings.set(MODULE_ID, "presets", all);
   return all[id];
 }
@@ -71,7 +104,9 @@ export function resolveScene(scene) {
   const paintedUrl = f.painted || preset.painted || sceneBackground(scene);
   if (!sketchUrl || !paintedUrl) return null;
   const config = sanitizeConfig(deepMerge(sanitizeConfig(preset.config), f.override ?? {}));
-  return { preset, hints: preset.hints?.length ? preset.hints : null, hintsStrict: !!preset.hintsStrict, sketchUrl, paintedUrl, config, trigger: f.trigger === "view" ? "view" : "activate", name: preset.name };
+  // podpowiedzi AI wykryto na obrazie presetu — przy innym obrazie malowanym (scena / tło) byłyby w złych miejscach
+  const hintsFit = paintedUrl === preset.painted && preset.hints?.length;
+  return { preset, hints: hintsFit ? preset.hints : null, hintsStrict: hintsFit ? !!preset.hintsStrict : false, sketchUrl, paintedUrl, config, trigger: f.trigger === "view" ? "view" : "activate", name: preset.name };
 }
 
 export { defaultConfig };

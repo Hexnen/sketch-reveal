@@ -207,6 +207,16 @@ const HEX6 = /^#[0-9a-f]{6}$/i;
 /** Jak `hexOr` z ranges.ts (TitleOpts nie ma dziś kolorów; zostawione dla pól typu color). */
 const hexOr = (v, def) => (typeof v === "string" && HEX6.test(v) ? v.toLowerCase() : def);
 
+/**
+ * Tekst napisu: samotne surogaty i znaki sterujące psułyby serializację XML eksportu (obraz SVG) albo rzucały URIError,
+ * a bardzo długi tekst = tysiące animacji — stąd oczyszczenie i limit 200 znaków.
+ */
+function cleanText(x) {
+  let s = typeof x.toWellFormed === "function" ? x.toWellFormed() : x;
+  s = s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, "");
+  return s.length > 200 ? s.slice(0, 200) : s;
+}
+
 /** Dowolny obiekt → poprawne opcje napisu (zakresy, wyliczenia, typy). Nigdy nie rzuca. */
 export function sanitizeTitle(raw) {
   const out = { ...DEFAULT_TITLE };
@@ -223,7 +233,8 @@ export function sanitizeTitle(raw) {
         if (typeof x === "boolean") out[k] = x;
       } else if (typeof d === "string") {
         const allowed = ENUMS[k];
-        if (typeof x === "string" && (!allowed || allowed.includes(x))) out[k] = x;
+        if ((k === "text" || k === "subtitle") && typeof x === "string") out[k] = cleanText(x);
+        else if (typeof x === "string" && (!allowed || allowed.includes(x))) out[k] = x;
         else if (/color/i.test(k)) out[k] = hexOr(x, d);
       }
     }
@@ -333,7 +344,6 @@ const BASE_CSS = `
 .rvt-lite .rvt-puff { filter: none; }
 .sr-title svg.rvt-defs { position: absolute; width: 0; height: 0; }
 @media (prefers-reduced-motion: reduce) { .rvt-block { animation: none !important; transform: translate3d(0,-50%,0) scale(1.22) !important; } }
-@media (prefers-reduced-motion: reduce) { .rvt-letter, .rvt-line, .rvt-halo, .rvt-sub, .rvt-inner, .rvt-puff { animation-duration: .01s !important; animation-delay: 0s !important; } }
 `;
 
 let cssUsers = 0;
@@ -407,8 +417,10 @@ export function createTitle({ host, opts, lite = false }) {
   let fitArgs = null;
   let disposed = false;
   let fontsHooked = false;
+  let builtDuration = 0; // sekundy własnego zegara napisu do końca zaniku (dla odtwarzacza: oś musi być tak długa)
 
   function teardown() {
+    builtDuration = 0;
     root?.remove();
     root = null; anims = []; lastT = null; shown = false; fitArgs = null;
   }
@@ -472,7 +484,9 @@ export function createTitle({ host, opts, lite = false }) {
     root.setAttribute("aria-label", o.text);
     root.setAttribute("data-reveal-title", "");
     root.style.visibility = "hidden";
-    if (ex !== "none") root.style.animation = `${P}gone .01s linear ${(exitAt + 4).toFixed(2)}s forwards`;
+    const goneAt = exitAt + Math.max(4, count * 0.07 + 1.5); // wave: ostatnia litera startuje po i·0,07 s + 1,3 s
+    builtDuration = ex === "none" ? exitAt : goneAt;
+    if (ex !== "none") root.style.animation = `${P}gone .01s linear ${goneAt.toFixed(2)}s forwards`;
 
     // ── filtr „rough” (stencil, chalk)
     let filterCss = s.filter;
@@ -652,7 +666,7 @@ export function createTitle({ host, opts, lite = false }) {
     if (!root) return;
     const on = o.enabled && !!o.text.trim() && lastProgress >= o.appearAt;
     if (!on) {
-      if (shown) { root.style.visibility = "hidden"; shown = false; lastT = null; }
+      if (shown) { apply(0); root.style.visibility = "hidden"; shown = false; lastT = null; }
       return;
     }
     if (!shown) {
@@ -694,5 +708,5 @@ export function createTitle({ host, opts, lite = false }) {
   }
 
   build();
-  return { update, setOpts, setLite, dispose };
+  return { update, setOpts, setLite, dispose, duration: () => builtDuration };
 }

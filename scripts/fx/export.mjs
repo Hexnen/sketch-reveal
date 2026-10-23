@@ -407,7 +407,8 @@ export async function exportWebm({ player, options = {}, onProgress, signal } = 
       drawScene(g, player.cam, cap, W, H);
       const root = player.container.querySelector("[data-reveal-title]");
       if (root && getComputedStyle(root).visibility !== "hidden") {
-        const img = await titleImage(root, player.container, player.frame, W, H);
+        // napis jest dzieckiem ramki obrazu (nie kontenera) — ramka jest i kontenerem, i prostokątem kadrowania
+        const img = await titleImage(root, player.frame, player.frame, W, H);
         if (img) { g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.globalCompositeOperation = "source-over"; g.drawImage(img, 0, 0, W, H); }
       }
       const frame = new VideoFrame(out, { timestamp: Math.round((i * 1e6) / fps), duration: Math.round(1e6 / fps) });

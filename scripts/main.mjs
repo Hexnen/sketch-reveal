@@ -1,6 +1,6 @@
 import { MODULE_ID } from "./config.mjs";
 import { RevealManager, createPresetMacro, showPresetToAll } from "./apps.mjs";
-import { armTransition, cancelTransition, preloadImages, registerSocket, runTransition } from "./play.mjs";
+import { armTransition, cancelTransition, preloadImages, registerSocket, registerSplashState, runTransition } from "./play.mjs";
 import { onRenderSceneConfig } from "./scene-tab.mjs";
 import { registerPerfSettings } from "./store.mjs";
 import { registerStore, resolveScene } from "./store.mjs";
@@ -26,6 +26,7 @@ Hooks.once("init", () => {
     name: "SKETCHREVEAL.Settings.Preload.Name", hint: "SKETCHREVEAL.Settings.Preload.Hint",
     scope: "client", config: true, type: new foundry.data.fields.BooleanField({ initial: true }),
   });
+  registerSplashState();
   registerPerfSettings();
   game.settings.register(MODULE_ID, "openrouterKey", {
     name: "SKETCHREVEAL.Settings.Key.Name", hint: "SKETCHREVEAL.Settings.Key.Hint",
@@ -99,11 +100,11 @@ Hooks.on("renderSceneConfig", onRenderSceneConfig);
 Hooks.on("hotbarDrop", (bar, data, slot) => {
   if (data?.type !== "SketchRevealPreset") return;
   const T = (k, d) => (d ? game.i18n.format(`SKETCHREVEAL.${k}`, d) : game.i18n.localize(`SKETCHREVEAL.${k}`));
-  if (!game.user.isGM) { ui.notifications.warn(T("Macro.GMOnly")); return false; }
+  if (!game.user.isGM) return false; // gracze nie dostają powiadomień modułu
   // zablokowany pasek nie przyjmie przypisania — makro i tak powstaje (katalog makr), a GM dostaje jasny komunikat
   const locked = bar.locked;
   createPresetMacro(data.presetId, locked ? null : slot)
-    .then((macro) => { if (macro && locked) ui.notifications.warn(T("Macro.BarLocked", { name: macro.name })); })
-    .catch((e) => { console.error(`${MODULE_ID} | makro z presetu`, e); ui.notifications.error(T("Macro.Failed", { error: e?.message ?? e })); });
+    .then((macro) => { if (macro && locked) ui.notifications.warn(T("Macro.BarLocked", { name: foundry.utils.escapeHTML(macro.name) })); })
+    .catch((e) => { console.error(`${MODULE_ID} | makro z presetu`, e); ui.notifications.error(T("Macro.Failed", { error: foundry.utils.escapeHTML(String(e?.message ?? e)) })); });
   return false; // własny typ — resztą (dokument) nie ma się zajmować pasek
 });
