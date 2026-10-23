@@ -18,6 +18,13 @@ kamery, ślad szkicu pod malunkiem, napis (22 style, 10 zaników, podtytuł), ro
 wykrywanie), czas przytrzymania/rozpłynięcia. Podpowiedzi świateł z AI (przycisk w sekcji rozbłysku, klucz OpenRouter
 w ustawieniach modułu, tylko GM) zapisują się w presecie — gracze klucza nie potrzebują.
 
+## Media Optimizer (opcjonalnie)
+Z modułem [Media Optimizer (Local)](https://github.com/Hexnen/local-media-optimizer) edytor presetu ma przycisk **Zoptymalizuj obrazy**:
+kopie szkicu i malunku jako WebP ≤ 4096 px (szkic q0,95, malunek q0,88) trafiają do `worlds/<świat>/sketch-reveal/images/`,
+preset dostaje nowe ścieżki, oryginały zostają. Każdy klient i tak skaluje obrazy do limitu tekstur przy starcie, więc zysk to
+głównie rozmiar pobierania (np. 13,9 MB → 2,5 MB). Upload idzie z `optimized: true`, żeby optymalizator nie kodował pliku drugi raz;
+tak samo oznaczona jest ikona makra. Bez modułu przycisk się nie pokazuje.
+
 ## Ustawienia klienta (wydajność)
 Rozdzielczość podglądu, limit klatek, lekkie animacje napisu, licznik FPS, auto-jakość — ustawienia modułu (per klient).
 

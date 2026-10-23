@@ -32,6 +32,7 @@
 </div>
 <footer class="form-footer">
   <button type="button" data-action="preview"><i class="fa-solid fa-play"></i> {{localize "SKETCHREVEAL.Editor.Preview"}}</button>
+  {{#if canOptimize}}<button type="button" data-action="optimizeImages" data-tooltip="SKETCHREVEAL.Optimize.Hint"><i class="fa-solid fa-compress"></i> {{localize "SKETCHREVEAL.Optimize.Button"}}</button>{{/if}}
   <button type="button" data-action="exportWebm"><i class="fa-solid fa-film"></i> {{localize "SKETCHREVEAL.Export.Button"}}</button>
   <button type="submit"><i class="fa-solid fa-floppy-disk"></i> {{saveLabel}}</button>
 </footer>

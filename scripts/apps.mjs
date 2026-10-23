@@ -1,6 +1,7 @@
 /* Aplikacje (ApplicationV2): menedżer presetów (splashe i przejścia) oraz edytor presetu / nadpisań sceny. */
 import { MODULE_ID, defaultConfig, deepMerge, sanitizeConfig } from "./config.mjs";
 import { exportRevealWebm } from "./export-ui.mjs";
+import { optimizeRevealImages, optimizerApi } from "./optimize.mjs";
 import { applyShowIf, configFormHtml, readForm } from "./form.mjs";
 import { broadcastClose, playSplash, preloadForAll, showSplashToAll } from "./play.mjs";
 import { detectLightHints } from "./fx/ai-hints.mjs";
@@ -43,7 +44,8 @@ async function makeSquareIcon(presetId, paintedUrl, size = 256) {
     const dir = `worlds/${game.world.id}/${MODULE_ID}`;
     try { await FP.createDirectory("data", dir, {}); } catch { /* katalog już istnieje */ }
     const name = `${presetId}.webp`;
-    const res = await FP.upload("data", dir, new File([blob], name, { type: "image/webp" }), {}, { notify: false });
+    // optimized: true — to już zakodowany WebP; optymalizator mediów nie ma go kodować drugi raz
+    const res = await FP.upload("data", dir, new File([blob], name, { type: "image/webp" }), {}, { notify: false, optimized: true });
     return res?.path ?? `${dir}/${name}`;
   } catch (e) { console.warn(`${MODULE_ID} | ikona makra`, e); return null; }
 }
@@ -77,7 +79,7 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     window: { icon: "fa-solid fa-paintbrush", resizable: true },
     position: { width: 560, height: 720 },
     form: { handler: RevealEditor.#onSubmit, closeOnSubmit: true },
-    actions: { preview: RevealEditor.#onPreview, exportWebm: RevealEditor.#onExportWebm },
+    actions: { preview: RevealEditor.#onPreview, exportWebm: RevealEditor.#onExportWebm, optimizeImages: RevealEditor.#onOptimize },
   };
 
   static PARTS = { body: { template: `modules/${MODULE_ID}/templates/editor.hbs`, scrollable: [".sr-editor-scroll"] } };
@@ -116,6 +118,7 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       kinds: [{ value: "splash", label: T("Kind.splash") }, { value: "transition", label: T("Kind.transition") }],
       configHtml: configFormHtml(this.cfg, this.scene ? "" : this._aiHtml()),
       saveLabel: T("Editor.Save"),
+      canOptimize: !this.scene && !!optimizerApi(), // przycisk tylko gdy działa moduł Media Optimizer (Local)
     };
   }
 
@@ -177,6 +180,25 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     this._collect();
     if (!this.meta.sketch || !this.meta.painted) return ui.notifications.warn(T("Editor.NeedImages"));
     playSplash({ sketchUrl: this.meta.sketch, paintedUrl: this.meta.painted, config: this.cfg, hints: this.hints ?? null, hintsStrict: !!this.hintsStrict });
+  }
+
+  /** „Zoptymalizuj obrazy”: kopie WebP ≤ 4096 px przez Media Optimizer; preset dostaje nowe ścieżki, oryginały zostają. */
+  static async #onOptimize(event, target) {
+    this._collect();
+    if (!this.meta.sketch || !this.meta.painted) return ui.notifications.warn(T("Editor.NeedImages"));
+    target.disabled = true;
+    try {
+      const r = await optimizeRevealImages(this.meta);
+      if (!r.changed) ui.notifications.info(T("Optimize.None"));
+      else {
+        this.meta.sketch = r.sketch; this.meta.painted = r.painted; // hinty AI są w uv, więc zostają ważne dla zmniejszonego obrazu
+        ui.notifications.info(foundry.utils.escapeHTML(r.summary));
+        this.render();
+      }
+    } catch (e) {
+      console.error(`${MODULE_ID} | optymalizacja obrazów`, e);
+      ui.notifications.error(TE("Optimize.Failed", { error: String(e?.message ?? e) }));
+    } finally { target.disabled = false; }
   }
 
   static async #onExportWebm() {
