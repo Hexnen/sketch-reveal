@@ -64,3 +64,8 @@
 .sr-sync-hud ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: .15rem; }
 .sr-sync-hud li span { opacity: .7; margin-left: .3rem; }
 .sr-sync-hud li.ok i { color: #6ee7a0; } .sr-sync-hud li.bad i { color: #f87171; } .sr-sync-hud li.wait i { color: #fbbf24; }
+
+/* AI Image Gen dialog: keep the description box and the versions row from overlapping */
+.sr-ai-dialog { display: flex; flex-direction: column; gap: 0.5rem; }
+.sr-ai-dialog textarea { display: block; width: 100%; min-height: 4.5em; resize: vertical; box-sizing: border-box; }
+.sr-ai-dialog .form-group { margin: 0; }
