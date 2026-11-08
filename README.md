@@ -18,6 +18,33 @@ kamery, ślad szkicu pod malunkiem, napis (22 style, 10 zaników, podtytuł), ro
 wykrywanie), czas przytrzymania/rozpłynięcia. Podpowiedzi świateł z AI (przycisk w sekcji rozbłysku, klucz OpenRouter
 w ustawieniach modułu, tylko GM) zapisują się w presecie — gracze klucza nie potrzebują.
 
+## Pasek wiadomości (news bar)
+Trzeci rodzaj presetu: telewizyjny pasek nad mapą (blok kanału + znacznik „na żywo”, belka z tytułem, pasek z listą
+wiadomości). Bez obrazów. Tryb: pętla (do zdjęcia; opcjonalne auto-zdjęcie po N min) albo jeden przebieg (każda
+wiadomość raz, potem schodzi sam). Styl: klapka (po jednej, długie przewijają się do końca) albo przesuw (ciągły).
+Wygląd (`ticker.look`, pole „Wygląd”; stare presety = `broadcast`):
+- `broadcast` — telewizja: ciemny blok kanału, belka w kolorze akcentu, jasny pasek; wiadomość podjeżdża od dołu.
+- `wire` — dalekopis: papierowa taśma wsuwa się z lewej, kanał i „na żywo” odbijają się jak pieczątki, tytuł to
+  przyklejony wycinek (Amiri), wiadomości są wystukiwane maszynowo litera po literze (Courier New), stara odjeżdża w lewo.
+- `signal` — sygnał (sci-fi): ciemne pasmo ze ściętym końcem na szynie świetlnej w kolorze akcentu (Bruno Ace), pasmo
+  otwiera się w dół z szyny, stara wiadomość gaśnie do kreski jak kineskop, nową odsłania promień skanera.
+Wygląd zmieniony w trakcie nadawania przełącza pasek u wszystkich (krótkie przenikanie). Ograniczony ruch / tryb lite
+działają we wszystkich trzech. Lista wiadomości w edytorze to „scenariusz wydania”: wiersz = etykieta + tekst
+bez ramek pól; Enter dzieli w miejscu kursora, Backspace na początku łączy z poprzednią, Alt+↑/↓ lub uchwyt
+przestawia, „ETYKIETA | tekst” albo wklejka wielu linii (też z tabulatorem) wypełnia wiersze, Ctrl+Enter = „Zastosuj”.
+„ETYKIETA |” na początku tekstu działa przy każdym sposobie wpisania (klawisz po klawiszu, wklejenie jednej linii,
+autouzupełnienie, IME) i zastępuje dotychczasową etykietę wiersza; Backspace tuż po zamianie ją cofa.
+GM nadaje z menedżera (ikona anteny), makrem z paska (przeciągnij miniaturę — makro jest przełącznikiem) albo z konsoli:
+`game.modules.get("sketch-reveal").api.ticker.start(id)` / `.stop()` / `.toggle(id)` / `.onAir()` / `.preview(data)`.
+Pasek stoi między kolumną narzędzi a paskiem bocznym, nad paskiem makr, i ustępuje pływającemu dolnemu UI innych
+modułów (np. pasek reżysera moinen-maps, HUD drużyny): co 0,7 s mierzy widoczne elementy fixed/absolute przy dole
+ekranu i wjeżdża nad nie (za wysokie — zwęża się od ich strony). Kliknięcia nadal przechodzą przez pasek.
+Stan „na antenie” jest ustawieniem świata (`tickerState`), więc widzą go też gracze, którzy weszli później. Zapis presetu
+w trakcie nadawania zmienia pasek u wszystkich od następnej wiadomości (przycisk „Zastosuj” zapisuje bez zamykania).
+Podgląd silnika bez Foundry: `tools/harness-ticker.html?auto` przez serwer statyczny w katalogu modułu
+(parametry: `look=wire|signal|broadcast`, `hud=1` — atrapy dolnych HUD-ów innych modułów, `style=crawl`, `mode=once`, `reduced=1`, `lite=1`, `light=1`, `ui=0`, `min`,
+`slow=5` — zwolnione tempo, `lang=en`; panel zawiera prawdziwy edytor listy z `ticker-form.mjs`).
+
 ## Media Optimizer (opcjonalnie)
 Z modułem [Media Optimizer (Local)](https://github.com/Hexnen/local-media-optimizer) edytor presetu ma przycisk **Zoptymalizuj obrazy**:
 kopie szkicu i malunku jako WebP ≤ 4096 px (szkic q0,95, malunek q0,88) trafiają do `worlds/<świat>/sketch-reveal/images/`,

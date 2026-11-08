@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>harness-ticker</title>
+<link rel="stylesheet" href="../styles/ticker.css">
+<style>
+/* lokalne kopie Signiki (te same pliki, które Foundry serwuje z /fonts) — ścieżka z ticker.css działa tylko w Foundry */
+@font-face { font-family: "SR News"; src: url("fonts/signika-medium.woff2") format("woff2"); font-weight: 500; }
+@font-face { font-family: "SR News"; src: url("fonts/signika-semibold.woff2") format("woff2"); font-weight: 600; }
+@font-face { font-family: "SR News"; src: url("fonts/signika-bold.woff2") format("woff2"); font-weight: 700; }
+@font-face { font-family: "SR Wire Head"; src: url("fonts/amiri-bold.woff2") format("woff2"); font-weight: 700; }
+@font-face { font-family: "SR Signal"; src: url("fonts/bruno-ace.woff2") format("woff2"); font-weight: 400; }
+@font-face { font-family: "SR Signal SC"; src: url("fonts/bruno-ace-sc.woff2") format("woff2"); font-weight: 400; }
+html,body{margin:0;height:100%;overflow:hidden;background:#111;color:#ddd;font:13px/1.35 system-ui,sans-serif}
+#map{position:fixed;inset:0;background:#222 url("../samples/ulica/painted.png") center/cover no-repeat}
+#map.light{background-image:url("../samples/miasto/painted.png")}
+/* atrapy UI Foundry v14: kolumna narzędzi z lewej, pasek boczny z prawej, pasek makr na dole */
+.fake{position:fixed;background:rgba(20,18,26,.82);border:1px solid rgba(255,255,255,.12);display:none}
+body.ui .fake{display:block}
+#f-left{left:16px;top:16px;width:72px;bottom:16px}
+#f-side{right:0;top:0;bottom:0;width:300px}
+#f-hot{bottom:16px;height:60px;left:50%;width:560px;transform:translateX(-50%)}
+/* atrapy dolnego UI innych modułów (?hud=1): pasek reżysera moinen-maps (fixed, z 31, nad paskiem makr) i HUD drużyny */
+.hud{position:fixed;display:none;background:rgba(35,30,22,.92);border:1px solid rgba(233,196,106,.5);color:#e9c46a;font:12px/1 system-ui;align-items:center;justify-content:center}
+body.show-hud .hud{display:flex}
+#f-dir{z-index:31;left:50%;transform:translateX(-50%);bottom:84px;width:416px;height:32px;border-radius:16px}
+#f-party{z-index:31;left:100px;bottom:16px;width:250px;height:140px;border-radius:6px}
+#panel{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:100;width:min(980px,calc(100% - 24px));background:rgba(12,12,16,.92);
+  border:1px solid #333;border-radius:8px;padding:8px 10px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#panel.min{grid-template-columns:1fr} #panel.min .more{display:none}
+#panel label{display:inline-flex;gap:4px;align-items:center;margin-right:8px;white-space:nowrap}
+
+#panel .row input[type=text]{background:#000;color:#eee;border:1px solid #444;width:180px}
+#panel .row button{background:#2b2b35;color:#eee;border:1px solid #555;border-radius:4px;padding:3px 9px;cursor:pointer}
+#panel .row button:hover{background:#3a3a48}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+#log{font:11px ui-monospace,monospace;opacity:.8;min-height:1.3em}
+/* atrapa okna edytora Foundry (ciemny motyw) — lista wiadomości z prawdziwego ticker-form.mjs */
+#editor{grid-column:1/-1;max-height:46vh;overflow:auto;background:#1b1b22;color:#e7e5e2;border:1px solid #3a3a44;border-radius:6px;
+  padding:4px 12px 8px;font:14px/1.4 "SR News","Signika",system-ui,sans-serif}
+#editor fieldset{border:1px solid #3a3a44;border-radius:6px;margin:4px 0;padding:4px 8px 8px}
+#editor legend{padding:0 4px;font-weight:600}
+#editor .hint{font-size:12px;color:#a9a6a0;margin:0}
+#editor button{font:inherit}
+/* przybliżenie domyślnych pól Foundry (podobna specyficzność), żeby było widać, że style listy je nadpisują */
+.application.themed input[type=text], .application.themed textarea{height:32px;background:rgba(0,0,0,.35);border:1px solid #6b6a72;border-radius:4px;padding:0 6px;color:#e7e5e2;font:inherit}
+.application.themed button{background:rgba(255,255,255,.07);border:1px solid #6b6a72;border-radius:4px;color:inherit;padding:2px 8px}
+</style></head><body class="ui">
+<div id="map"></div>
+<div class="fake" id="f-left"></div><div class="fake" id="f-side"></div><div class="fake" id="f-hot"></div>
+<div class="hud" id="f-dir">#mm-dir-bar (atrapa)</div><div class="hud" id="f-party">HUD drużyny (atrapa)</div>
+<div id="panel">
+  <div class="row">
+    <button id="start">▶ Na antenę</button><button id="stop">■ Zdejmij</button><button id="apply">↻ Zapisz (na żywo)</button>
+    <button id="add">+ wiadomość na żywo</button><button id="toggle">zwiń panel</button>
+  </div>
+  <div class="row more">
+    <label><input id="ui" type="checkbox" checked> atrapy UI Foundry</label>
+    <label><input id="hud" type="checkbox"> dolne HUD-y innych modułów</label>
+    <label><input id="light" type="checkbox"> jasna mapa</label>
+    <label><input id="reduced" type="checkbox"> reduced motion</label>
+    <label><input id="lite" type="checkbox"> lite</label>
+    <label><input id="gm" type="checkbox" checked> przycisk GM</label>
+  </div>
+  <div class="row more">
+    <label>kanał <input id="channel" type="text" value="Kanał 7"></label>
+    <label>belka <input id="headline" type="text" value="Smok nad Kamiennym Mostem"></label>
+    <label>akcent <input id="accent" type="color" value="#c8102e"></label>
+    <label><input id="live" type="checkbox" checked> na żywo</label>
+  </div>
+  <div class="row more">
+    <label>tryb <select id="mode"><option value="loop">pętla</option><option value="once">jeden przebieg</option></select></label>
+    <label>wygląd <select id="look"><option value="broadcast">broadcast (TV)</option><option value="wire">wire (dalekopis)</option><option value="signal">signal (sci-fi)</option></select></label>
+    <label>styl <select id="style"><option value="flip">klapka</option><option value="crawl">przesuw</option></select></label>
+    <label>tempo <input id="speed" type="number" value="1" min="0.5" max="2" step="0.1" style="width:52px"></label>
+    <label>rozmiar <select id="size"><option value="s">mały</option><option value="m" selected>normalny</option><option value="l">duży</option></select></label>
+  </div>
+  <form id="editor" class="application themed sketch-reveal more" onsubmit="return false"></form>
+  <button id="applyLive" data-action="applyLive" type="button" hidden></button>
+  <div id="log" class="more" style="grid-column:1/-1"></div>
+</div>
+<script type="module">
+// atrapy globali Foundry, których używa ticker-form.mjs (game.i18n, foundry.utils.escapeHTML, ui.notifications)
+const qs = new URLSearchParams(location.search);
+// ?slow=5 — zwolnione tempo do oglądania choreografii (animacje WAAPI i timery strony × k)
+const slow = Math.max(1, +qs.get("slow") || 1);
+if (slow > 1) {
+  const anim = Element.prototype.animate, st = window.setTimeout;
+  Element.prototype.animate = function (kf, o) {
+    if (typeof o === "number") o *= slow;
+    else if (o) o = { ...o, duration: (o.duration ?? 0) * slow, delay: (o.delay ?? 0) * slow, endDelay: (o.endDelay ?? 0) * slow };
+    return anim.call(this, kf, o);
+  };
+  window.setTimeout = (f, ms, ...a) => st(f, (ms ?? 0) * slow, ...a);
+}
+const lang = await (await fetch(`../lang/${qs.get("lang") === "en" ? "en" : "pl"}.json`)).json();
+window.game = { i18n: { localize: (k) => lang[k] ?? k, format: (k, d) => (lang[k] ?? k).replace(/\{(\w+)\}/g, (_, n) => d?.[n] ?? "") } };
+window.foundry = { utils: { escapeHTML: (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]) } };
+window.ui = { notifications: { warn: (m) => log(`⚠ ${m}`) } };
+const { NewsBar, sanitizeTicker, estimatePassMs, avoidBottomUi } = await import("../scripts/fx/ticker.mjs");
+const { tickerFormHtml, bindTickerItems, readTickerForm } = await import("../scripts/ticker-form.mjs");
+const $ = (id) => document.getElementById(id);
+const log = (m) => { $("log").textContent = m; console.log("[ticker]", m); };
+const SAMPLE = [
+  { label: "PILNE", text: "Smok widziany nad Kamiennym Mostem — straż miejska zamyka przeprawę do odwołania" },
+  { label: "GOSPODARKA", text: "Ceny zboża w Dolnym Grodzie wzrosły o 30 procent" },
+  { label: "", text: "Karawana z Południa spóźniona o trzy dni" },
+  { label: "POGODA", text: "Nad Marchiami Północnymi zbiera się burza, żeglarze zostają w portach, a kapitanowie liczą straty po ostatnim sztormie, który zatopił dwa statki handlowe" },
+  { label: "KULTURA", text: "Wielki Turniej Łuczniczy odbędzie się mimo żałoby na dworze" },
+];
+// edytor: tylko zestaw z listą wiadomości (pozostałe pola są w panelu harnessu)
+let unbind = () => {};
+function renderEditor(items) {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = tickerFormHtml({ accent: $("accent").value, items });
+  $("editor").replaceChildren(tpl.content.querySelector(".sr-rundown-set"));
+  unbind(); unbind = bindTickerItems(document.body);
+}
+const data = () => readTickerForm($("editor"), { channel: $("channel").value, headline: $("headline").value, accent: $("accent").value, live: $("live").checked,
+  look: $("look").value, mode: $("mode").value, style: $("style").value, speed: +$("speed").value, size: $("size").value });
+/** Te same odstępy, które w Foundry liczy ticker-play.mjs (kolumna narzędzi, pasek boczny, pasek makr) + omijanie dolnych HUD-ów. */
+function bounds() {
+  const base = { left: 0, right: 0, bottom: 0 };
+  if ($("ui").checked) {
+    const l = $("f-left").getBoundingClientRect(), s = $("f-side").getBoundingClientRect(), h = $("f-hot").getBoundingClientRect();
+    Object.assign(base, { left: l.right + 12, right: innerWidth - s.left + 12, bottom: innerHeight - h.top + 10 });
+  }
+  return avoidBottomUi(base, { barHeight: bar?.el?.isConnected ? bar.el.getBoundingClientRect().height : 110 });
+}
+let bar = null;
+async function start() {
+  if (bar) await bar.exit();
+  const d = data();
+  // jak w ticker-play.mjs: odstępy przed startem (pasek od razu stoi na miejscu, bez przejazdu z rogu)
+  bar = new NewsBar({ data: d, reduced: $("reduced").checked, lite: $("lite").checked,
+    strings: { live: "NA ŻYWO", stop: "Zdejmij z anteny u wszystkich", region: "Pasek wiadomości" },
+    onStop: $("gm").checked ? () => stop() : null,
+    onFinish: () => log("jeden przebieg: koniec (pasek schodzi sam)") });
+  bar.setBounds(bounds());
+  bar.start();
+  window.bar = bar;
+  log(`na antenie · ${d.look} · ${d.items.length} poz. · szac. przebieg ${(estimatePassMs(d) / 1000).toFixed(1)} s`);
+}
+async function stop() { if (!bar) return; const b = bar; bar = null; await b.exit(); log("zdjęty"); }
+const apply = () => { if (bar) { bar.update(data()); log(`zaktualizowano na żywo · ${data().look}`); } };
+$("start").onclick = start; $("stop").onclick = stop; $("apply").onclick = apply; $("applyLive").onclick = apply;
+let n = 0;
+$("add").onclick = () => { renderEditor([...data().items, { label: "NOWE", text: `Dodana na żywo wiadomość nr ${++n}` }]); apply(); log(`dodano #${n}`); };
+$("toggle").onclick = () => $("panel").classList.toggle("min");
+$("ui").onchange = () => { document.body.classList.toggle("ui", $("ui").checked); bar?.setBounds(bounds()); };
+$("hud").onchange = () => document.body.classList.toggle("show-hud", $("hud").checked); // przeliczenie robi interwał (jak w Foundry)
+setInterval(() => bar?.setBounds(bounds()), 700);
+$("light").onchange = () => $("map").classList.toggle("light", $("light").checked);
+$("look").onchange = apply;
+$("accent").oninput = () => $("editor").querySelector(".sr-rundown-set")?.style.setProperty("--sr-accent", $("accent").value);
+addEventListener("resize", () => bar?.setBounds(bounds()));
+const set = (o) => { for (const [k, v] of Object.entries(o)) { const el = $(k); if (!el) continue; if (el.type === "checkbox") el.checked = v === true || v === "1" || v === "true"; else el.value = v; } };
+// parametry URL: ?hud=1 (dolne HUD-y innych modułów) &slow=5&look=wire&style=crawl&mode=once&speed=1.4&size=l&reduced=1&lite=1&light=1&ui=0&lang=en&min&auto
+set(Object.fromEntries([...qs].filter(([k]) => !["auto", "min", "lang"].includes(k))));
+document.body.classList.toggle("ui", $("ui").checked); document.body.classList.toggle("show-hud", $("hud").checked); $("map").classList.toggle("light", $("light").checked);
+if (qs.has("min")) $("panel").classList.add("min");
+renderEditor(SAMPLE);
+window.harness = { start, stop, data, bounds, set, renderEditor };
+if (qs.has("auto")) start();
+window.ready = true;
+</script></body></html>

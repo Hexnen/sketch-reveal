@@ -27,7 +27,7 @@ function makeOverlay(cls) {
 /** Zamyka bieżący splash (przejście sceny zostaje). */
 function closeSplash() { currentSplash?.close(); }
 /** Zamyka wszystko, co moduł pokazuje (splash i przejście) — „Zamknij u wszystkich”. */
-export function closeCurrent() { currentSplash?.close(); currentTransition?.close(); cancelTransition(); }
+export function closeCurrent() { currentSplash?.close(); currentTransition?.close(); cancelTransition(); Hooks.callAll("sketchReveal.closeAll"); }
 
 /* ---------------------------------------------------------------- preload */
 const warmed = new Set();
@@ -416,6 +416,14 @@ async function transitionStart(id, isClosed) {
   const msg = { action: "phase", id, userId: game.user.id, phase: "started", gmAt: epoch() + (info?.offset ?? 0), delay: Math.round(delay), rtt: Math.round(info?.rtt ?? -1) };
   if (runs.has(id)) Hooks.callAll("sketchReveal.phase", msg); else game.socket.emit(SOCKET, msg);
 }
+
+/* ---- te same kroki dla przejść spoza RevealPlayer (gazeta: newspaper-play.mjs) */
+/** Zacznij mierzyć różnicę zegara względem aktywującego GM-a (wołać, gdy klient wie, że zagra przejście z tym syncId). */
+export function prepareTransitionSync(id) { syncClock(id); }
+/** Zgłoś gotowość i poczekaj na wspólny czas startu (albo limit). `isClosed()` przerywa czekanie po stronie klienta. */
+export function awaitTransitionGo(id, isClosed) { return transitionStart(id, isClosed); }
+/** Klient bez efektu (np. brak zrzutu przy pierwszym wejściu): tylko zgłoś gotowość, żeby nie blokować bariery innych. */
+export function transitionReadyOnly(id) { reportTransitionReady(id); }
 
 /**
  * Inicjator (GM, który aktywował scenę): czeka na gotowość klientów oglądających tę scenę i wysyła wspólny start.

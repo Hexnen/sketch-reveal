@@ -1,0 +1,397 @@
+/* Pasek wiadomości (news bar): trzy wyglądy (.srn-broadcast, .srn-wire, .srn-signal) na wspólnym rdzeniu.
+   Kroje wyłącznie z czcionek Foundry (/fonts) — deklarujemy własne rodziny na tych samych plikach, bez pobierania czegokolwiek:
+   broadcast: Signika (półgruby/gruby nie są zadeklarowane przez rdzeń); wire: Amiri (pasek z tytułem) + systemowa maszynowa
+   (Courier New); signal: Bruno Ace / Bruno Ace SC (szeroki krój techniczny, ma polskie znaki). */
+@font-face { font-family: "SR News"; src: url("../../../fonts/signika/signika-medium.woff2") format("woff2"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "SR News"; src: url("../../../fonts/signika/signika-semibold.woff2") format("woff2"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "SR News"; src: url("../../../fonts/signika/signika-bold.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "SR Wire Head"; src: url("../../../fonts/amiri/amiri-bold.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "SR Signal"; src: url("../../../fonts/bruno-ace/bruno-ace.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "SR Signal SC"; src: url("../../../fonts/bruno-ace/bruno-ace-sc.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+
+/* ================================================================ wspólne */
+.srn {
+  --srn-ink: #0d1016;
+  --srn-u: calc(clamp(14px, 2.15vh, 32px) * var(--srn-k, 1));
+  position: fixed;
+  left: var(--srn-left, 0px);
+  right: var(--srn-right, 0px);
+  bottom: var(--srn-bottom, 0px);
+  /* nad płótnem, pod całym UI Foundry (--z-index-app = 30): powiadomienia czatu i okna rysują się na pasku */
+  z-index: 29;
+  pointer-events: none;
+  user-select: none;
+  font-size: var(--srn-u);
+  line-height: 1;
+  color: var(--srn-ink);
+  font-kerning: normal;
+  text-rendering: optimizeLegibility;
+  /* pasek ustępuje miejsca dolnemu UI innych modułów (ticker-play: avoidBottomUi) — płynnie, nie skokiem */
+  transition: left .28s cubic-bezier(.16, 1, .3, 1), right .28s cubic-bezier(.16, 1, .3, 1), bottom .28s cubic-bezier(.16, 1, .3, 1);
+}
+@media (prefers-reduced-motion: reduce) { .srn { transition: none; } }
+.srn.srn-reduced { transition: none; }
+.srn *, .srn *::before, .srn *::after { box-sizing: border-box; }
+.srn [hidden] { display: none !important; }
+.srn-pack { position: relative; }
+.srn-slot { position: relative; flex: 1; min-width: 0; overflow: hidden; }
+.srn-frame { position: absolute; inset: 0; display: flex; align-items: stretch; }
+.srn-viewport { position: relative; flex: 1; min-width: 0; overflow: hidden; display: flex; align-items: center; }
+.srn-text { display: inline-block; flex: none; white-space: nowrap; }
+/* długi tekst w trakcie przewijania: prawa krawędź gaśnie (widać, że ciąg dalszy nadjeżdża) */
+.srn-over .srn-viewport {
+  --srn-mask: linear-gradient(90deg, transparent 0, #000 .8em, #000 calc(100% - 2.2em), transparent);
+  -webkit-mask-image: var(--srn-mask); mask-image: var(--srn-mask);
+}
+/* tylko dla czytnika ekranu */
+.srn-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* przesuw */
+.srn-track { position: absolute; inset: 0; will-change: transform; }
+.srn-seg { position: absolute; left: 0; top: 0; bottom: 0; display: flex; align-items: center; white-space: nowrap; }
+
+/* przycisk „zdejmij” (tylko GM / podgląd): jedyne miejsce paska, które łapie wskaźnik */
+.srn-stop {
+  pointer-events: auto;
+  flex: none; align-self: stretch;
+  width: calc(var(--srn-u) * 1.9); height: auto; margin: 0; padding: 0;
+  display: grid; place-items: center;
+  border: 0; border-radius: 0;
+  background: transparent; color: var(--srn-stop-ink, var(--srn-ink));
+  opacity: .38; cursor: pointer;
+  transition: opacity .15s ease, background-color .15s ease, color .15s ease;
+}
+.srn-stop svg { width: calc(var(--srn-u) * .78); height: calc(var(--srn-u) * .78); fill: currentColor; }
+.srn-stop:hover, .srn-stop:focus-visible { opacity: 1; background: var(--srn-accent); color: var(--srn-on-accent); }
+.srn-stop:focus-visible { outline: 2px solid var(--srn-stop-ink, var(--srn-ink)); outline-offset: -4px; }
+.srn-stop:active { transform: scale(.94); }
+.srn-stop:disabled { pointer-events: none; }
+
+@keyframes srn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .28; } }
+@keyframes srn-blink { 50% { opacity: 0; } }
+
+/* ================================================================ broadcast — telewizja */
+.srn-broadcast {
+  --srn-paper: #f1f2f4;        /* pasek: chłodna biel, nie krem */
+  --srn-brand: #0d1016;
+  font-family: "SR News", "Signika", "Segoe UI", system-ui, sans-serif;
+}
+/* cień pod całym pakietem (pakiet naprawdę unosi się nad mapą); osobny element — clip-path ścina box-shadow */
+.srn-broadcast .srn-shadow { position: absolute; inset: 0; box-shadow: 0 calc(var(--srn-u) * .35) calc(var(--srn-u) * 1.3) rgba(0, 0, 0, .42); pointer-events: none; }
+.srn-broadcast .srn-pack { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; }
+
+/* blok kanału */
+.srn-broadcast .srn-brand {
+  grid-column: 1; grid-row: 1 / span 2;
+  position: relative; overflow: hidden;
+  display: flex; flex-direction: column; justify-content: center; align-items: flex-start;
+  gap: calc(var(--srn-u) * .34);
+  min-width: calc(var(--srn-u) * 4.6);
+  padding: 0 calc(var(--srn-u) * .95);
+  background: var(--srn-brand);
+  color: #fff;
+}
+.srn-broadcast:not(.srn-has-strap) .srn-brand { flex-direction: row; align-items: center; gap: calc(var(--srn-u) * .6); }
+.srn-broadcast.srn-no-brand .srn-brand { display: none; }
+.srn-broadcast .srn-channel { font-weight: 700; font-size: calc(var(--srn-u) * .92); letter-spacing: .035em; text-transform: uppercase; white-space: nowrap; }
+.srn-broadcast .srn-live {
+  display: inline-flex; align-items: center; gap: .42em;
+  padding: .32em .6em .28em;
+  background: var(--srn-accent); color: var(--srn-on-accent);
+  font-weight: 700; font-size: calc(var(--srn-u) * .56); letter-spacing: .09em; text-transform: uppercase; white-space: nowrap;
+}
+.srn-broadcast .srn-dot { width: .62em; height: .62em; border-radius: 50%; background: currentColor; animation: srn-pulse 1.8s ease-in-out infinite; }
+/* jednorazowy połysk przy wejściu (tylko w bloku kanału) */
+.srn-broadcast .srn-sheen {
+  position: absolute; inset: -10% auto -10% 0; width: 45%;
+  background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,.22) 50%, rgba(255,255,255,0));
+  opacity: 0; pointer-events: none;
+}
+
+/* belka z tytułem: wyrasta zza paska */
+.srn-broadcast .srn-strap { grid-column: 2; grid-row: 1; position: relative; overflow: hidden; height: calc(var(--srn-u) * 2.55); }
+.srn-broadcast:not(.srn-has-strap) .srn-strap { display: none; }
+.srn-broadcast .srn-strap-in {
+  position: absolute; inset: 0;
+  display: flex; align-items: center;
+  padding: 0 calc(var(--srn-u) * .85);
+  background: var(--srn-accent); color: var(--srn-on-accent);
+}
+.srn-broadcast .srn-hl-mask { position: relative; overflow: hidden; min-width: 0; flex: 1; padding: .12em 0; }
+.srn-broadcast .srn-headline {
+  margin: 0; font-weight: 700; font-size: calc(var(--srn-u) * 1.34); letter-spacing: -.012em; line-height: 1.08;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.srn-broadcast .srn-headline-ghost { position: absolute; inset: .12em 0 auto 0; }
+
+/* pasek */
+.srn-broadcast .srn-line {
+  grid-column: 2; grid-row: 2;
+  position: relative; display: flex; align-items: stretch;
+  height: calc(var(--srn-u) * 1.9);
+  background: var(--srn-paper);
+  font-size: var(--srn-u);
+}
+.srn-broadcast .srn-chip {
+  flex: none; display: flex; align-items: center;
+  padding: 0 calc(var(--srn-u) * .78);
+  background: var(--srn-accent); color: var(--srn-on-accent);
+  overflow: hidden;
+}
+/* pod belką w kolorze akcentu etykieta jest ciemniejsza — inaczej zlewa się z belką w jedną plamę */
+.srn-broadcast.srn-has-strap .srn-chip { background: var(--srn-accent-deep); color: var(--srn-on-accent-deep); }
+.srn-broadcast .srn-chip-text { font-weight: 700; font-size: calc(var(--srn-u) * .74); letter-spacing: .075em; text-transform: uppercase; white-space: nowrap; }
+.srn-broadcast .srn-viewport { padding: 0 calc(var(--srn-u) * .8); }
+.srn-broadcast .srn-text { font-weight: 600; font-size: var(--srn-u); padding-top: .06em; }
+.srn-broadcast .srn-seg-label { margin-right: .55em; color: var(--srn-accent-deep); font-weight: 700; font-size: calc(var(--srn-u) * .74); letter-spacing: .075em; text-transform: uppercase; }
+.srn-broadcast .srn-seg-text { font-weight: 600; font-size: var(--srn-u); padding-top: .06em; }
+.srn-broadcast .srn-sep { flex: none; width: .36em; height: .36em; margin: 0 1.15em; background: var(--srn-accent); transform: translateY(.02em); }
+
+/* ================================================================ wire — dalekopis
+   Taśma papierowa wklejona lekko krzywo, odciski pieczątek, przyklejony pasek z tytułem, pismo maszynowe. */
+.srn-wire {
+  --srn-paper: #ebe6d9;        /* papier taśmy: szarawy, nie kremowy */
+  --srn-ink: #1e1c18;          /* czerń taśmy barwiącej */
+  --srn-type: "Courier New", Courier, "Nimbus Mono PS", "Liberation Mono", "DejaVu Sans Mono", monospace;
+  font-family: var(--srn-type);
+}
+.srn-wire .srn-pack { display: flex; flex-direction: column; align-items: flex-start; rotate: -.35deg; }
+
+/* pasek z tytułem: wycinek z gazety przyklejony na taśmę (zachodzi na nią) */
+.srn-wire .srn-strap { position: relative; z-index: 2; max-width: min(80%, 42em); margin: 0 0 calc(var(--srn-u) * -.3) calc(var(--srn-u) * 1.2); }
+.srn-wire:not(.srn-has-strap) .srn-strap { display: none; }
+.srn-wire .srn-strap-in {
+  rotate: -1.5deg;
+  padding: calc(var(--srn-u) * .34) calc(var(--srn-u) * .8) calc(var(--srn-u) * .2);
+  background: #f3efe4; color: var(--srn-ink);
+  border-top: calc(var(--srn-u) * .16) solid var(--srn-ink);   /* gruba linia nad tytułem — jak w kolumnie gazety */
+  box-shadow: 0 calc(var(--srn-u) * .12) calc(var(--srn-u) * .45) rgba(0, 0, 0, .38);
+}
+.srn-wire .srn-strap-ghost { position: absolute; left: 0; bottom: 0; }
+.srn-wire .srn-hl-mask { overflow: hidden; }
+.srn-wire .srn-headline {
+  margin: 0; font-family: "SR Wire Head", "Amiri", Georgia, "Times New Roman", serif; font-weight: 700;
+  font-size: calc(var(--srn-u) * 1.3); line-height: 1.12; letter-spacing: -.005em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* taśma */
+.srn-wire .srn-line {
+  align-self: stretch;
+  position: relative; display: flex; align-items: stretch;
+  height: calc(var(--srn-u) * 1.95);
+  background: var(--srn-paper); color: var(--srn-ink);
+  box-shadow: 0 calc(var(--srn-u) * .2) calc(var(--srn-u) * .75) rgba(0, 0, 0, .45);
+  font-size: var(--srn-u);
+}
+/* pieczątki: kanał i „na żywo” odciśnięte tuszem w kolorze akcentu */
+.srn-wire .srn-brand { flex: none; display: flex; align-items: center; gap: calc(var(--srn-u) * .55); padding: 0 calc(var(--srn-u) * .35) 0 calc(var(--srn-u) * .8); }
+.srn-wire.srn-no-brand .srn-brand { display: none; }
+.srn-wire .srn-channel, .srn-wire .srn-live {
+  display: inline-flex; align-items: center; gap: .4em;
+  font-family: "SR News", "Signika", "Segoe UI", sans-serif; font-weight: 700; text-transform: uppercase; white-space: nowrap;
+  color: var(--srn-accent-ink);
+  border: .14em solid currentColor; border-radius: .18em;
+  padding: .24em .5em .16em;
+  mix-blend-mode: multiply; opacity: .88;
+}
+.srn-wire .srn-channel { font-size: calc(var(--srn-u) * .72); letter-spacing: .06em; rotate: -2.5deg; }
+.srn-wire .srn-live { font-size: calc(var(--srn-u) * .5); letter-spacing: .12em; rotate: 3deg; }
+.srn-wire .srn-dot { width: .6em; height: .6em; border-radius: 50%; background: currentColor; }
+
+.srn-wire .srn-frame { align-items: center; }
+.srn-wire .srn-viewport { height: 100%; padding: 0 calc(var(--srn-u) * .7); }
+.srn-wire .srn-type {
+  display: inline-block; flex: none; white-space: pre;
+  font-weight: 700; font-size: calc(var(--srn-u) * .9); letter-spacing: .01em; text-transform: uppercase;
+  transition: transform .14s linear;
+}
+.srn-wire .srn-text { display: inline; }
+.srn-wire .srn-type-label { color: var(--srn-accent-ink); }  /* czerwona połowa taśmy barwiącej */
+.srn-wire .srn-caret { display: inline-block; width: .6em; height: .92em; margin-left: .04em; vertical-align: -.1em; background: currentColor; opacity: .85; animation: srn-blink 1.06s steps(1, end) infinite; }
+.srn-wire .srn-typing .srn-caret { animation: none; }
+.srn-wire .srn-seg { font-weight: 700; font-size: calc(var(--srn-u) * .9); text-transform: uppercase; white-space: pre; }
+.srn-wire .srn-seg-label { color: var(--srn-accent-ink); }
+.srn-wire .srn-sep { flex: none; width: .9em; height: .36em; margin: 0 1.1em; border-block: .11em solid currentColor; opacity: .75; }
+
+/* ================================================================ signal — sygnał (sci-fi)
+   Ciemne pasmo ze ściętym końcem, szyna świetlna w kolorze akcentu, szeroki krój techniczny. */
+.srn-signal {
+  --srn-band: rgba(11, 16, 23, .95);
+  --srn-hi: #e7eef4;
+  --srn-stop-ink: var(--srn-hi);
+  font-family: "SR Signal", "Bruno Ace", "Segoe UI", sans-serif;
+  color: var(--srn-hi);
+}
+.srn-signal .srn-pack { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; }
+
+/* płytka z tytułem: stoi na szynie; skos rysuje pseudo-element (clip-path elementu służy animacji) */
+.srn-signal .srn-strap { grid-row: 1; grid-column: 1; justify-self: start; max-width: min(84%, 48em); }
+.srn-signal:not(.srn-has-strap) .srn-strap { display: none; }
+.srn-signal .srn-strap-in { position: relative; isolation: isolate; padding: calc(var(--srn-u) * .44) calc(var(--srn-u) * 1.7) calc(var(--srn-u) * .36) calc(var(--srn-u) * .85); color: #fff; }
+.srn-signal .srn-strap-in::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--srn-band); clip-path: polygon(0 0, calc(100% - var(--srn-u) * .9) 0, 100% 100%, 0 100%); }
+.srn-signal .srn-hl-mask { position: relative; overflow: hidden; padding: .08em 0; }
+.srn-signal .srn-headline { margin: 0; font-size: calc(var(--srn-u) * 1.02); line-height: 1.2; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.srn-signal .srn-headline-ghost { position: absolute; inset: .08em 0 auto 0; }
+
+/* pasmo */
+.srn-signal .srn-line { grid-row: 2; grid-column: 1; position: relative; isolation: isolate; display: flex; align-items: stretch; height: calc(var(--srn-u) * 1.95); font-size: var(--srn-u); }
+.srn-signal .srn-line::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--srn-band); clip-path: polygon(0 0, 100% 0, calc(100% - var(--srn-u) * 1.1) 100%, 0 100%); }
+/* szyna świetlna: górna krawędź pasma */
+.srn-signal .srn-rail {
+  grid-row: 2; grid-column: 1; align-self: start; z-index: 1;
+  position: relative; overflow: hidden; display: block;
+  height: max(2px, calc(var(--srn-u) * .1)); margin-top: max(-1px, calc(var(--srn-u) * -.05));
+  background: var(--srn-accent-ink); transform-origin: 0 50%; pointer-events: none;
+}
+.srn-signal .srn-scan { position: absolute; inset: 0 auto 0 0; width: 20%; opacity: 0; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .95) 72%, transparent); }
+
+/* zakładka kanału */
+.srn-signal .srn-brand { flex: none; position: relative; isolation: isolate; display: flex; align-items: center; gap: calc(var(--srn-u) * .7); padding: 0 calc(var(--srn-u) * 1.55) 0 calc(var(--srn-u) * .85); color: var(--srn-on-accent); }
+.srn-signal .srn-brand::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--srn-accent); clip-path: polygon(0 0, 100% 0, calc(100% - var(--srn-u) * .9) 100%, 0 100%); }
+.srn-signal.srn-no-brand .srn-brand { display: none; }
+.srn-signal .srn-channel { font-family: "SR Signal SC", "SR Signal", sans-serif; font-size: calc(var(--srn-u) * .74); letter-spacing: .07em; white-space: nowrap; padding-top: .1em; }
+.srn-signal .srn-live { display: inline-flex; align-items: center; gap: .45em; font-family: "SR Signal SC", "SR Signal", sans-serif; font-size: calc(var(--srn-u) * .5); letter-spacing: .14em; white-space: nowrap; }
+.srn-signal .srn-dot { width: .6em; height: .6em; background: currentColor; animation: srn-blink 1.3s steps(1, end) infinite; }
+
+.srn-signal .srn-frame { align-items: center; }
+.srn-signal .srn-chip { flex: none; display: flex; align-items: center; height: 100%; padding-left: calc(var(--srn-u) * .85); color: var(--srn-accent-ink); }
+.srn-signal .srn-chip::after { content: ""; width: max(2px, calc(var(--srn-u) * .1)); height: calc(var(--srn-u) * .95); margin-left: calc(var(--srn-u) * .6); background: currentColor; transform: skewX(-20deg); }
+.srn-signal .srn-chip-text { font-family: "SR Signal SC", "SR Signal", sans-serif; font-size: calc(var(--srn-u) * .6); letter-spacing: .12em; white-space: nowrap; padding-top: .1em; }
+.srn-signal .srn-viewport { height: 100%; padding: 0 calc(var(--srn-u) * 1.5) 0 calc(var(--srn-u) * .7); }
+.srn-signal .srn-text { font-size: calc(var(--srn-u) * .8); letter-spacing: .015em; padding-top: .1em; }
+.srn-signal .srn-beam { position: absolute; left: 0; top: calc(var(--srn-u) * .32); bottom: calc(var(--srn-u) * .32); width: max(2px, calc(var(--srn-u) * .12)); margin-left: calc(var(--srn-u) * -.12); background: var(--srn-accent-ink); pointer-events: none; }
+.srn-signal .srn-seg-label { margin-right: .9em; font-family: "SR Signal SC", "SR Signal", sans-serif; font-size: calc(var(--srn-u) * .6); letter-spacing: .12em; color: var(--srn-accent-ink); padding-top: .1em; }
+.srn-signal .srn-seg-text { font-size: calc(var(--srn-u) * .8); letter-spacing: .015em; padding-top: .1em; }
+.srn-signal .srn-sep { flex: none; width: max(2px, calc(var(--srn-u) * .1)); height: 1.1em; margin: 0 1.4em; background: var(--srn-accent-ink); transform: skewX(-20deg); }
+
+/* ================================================================ ograniczony ruch: tekst może zająć do trzech linijek zamiast przewijania; bez pulsowania */
+.srn-reduced .srn-line { height: auto; min-height: calc(var(--srn-u) * 1.9); }
+.srn-reduced .srn-slot { display: grid; }
+.srn-reduced .srn-frame { position: relative; grid-area: 1 / 1; }
+.srn-reduced .srn-viewport { padding-block: calc(var(--srn-u) * .32); }
+.srn-reduced .srn-text { white-space: normal; flex: 1; line-height: 1.22; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.srn-reduced.srn-wire .srn-type { white-space: normal; flex: 1; line-height: 1.22; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.srn-reduced.srn-wire .srn-text { display: inline; }
+.srn-reduced .srn-caret { display: none; }
+.srn-reduced .srn-dot { animation: none; }
+@media (prefers-reduced-motion: reduce) { .srn-dot, .srn-caret { animation: none; } }
+
+/* ================================================================ edytor: lista wiadomości jako scenariusz wydania
+   Bez ramek pól: kolumna rubryk (etykiety w kolorze akcentu, jak na pasku) i tekst pisany jak proza, zawijany.
+   Bieżący wiersz podświetla się tłem (jak linia w edytorze), uchwyt i usuwanie pokazują się przy wskaźniku / fokusie. */
+.sketch-reveal .sr-rundown-set {
+  --sr-accent: #c8102e;
+  --sr-slug: 8ch;
+  --sr-ink-soft: color-mix(in srgb, currentColor 48%, transparent);
+  --sr-row-hi: color-mix(in srgb, currentColor 7%, transparent);
+}
+.sketch-reveal .sr-rundown { list-style: none; margin: 0 0 .35rem; padding: .15rem 0; display: flex; flex-direction: column; gap: 1px; }
+.sketch-reveal .sr-rundown .sr-item {
+  position: relative;
+  display: grid; grid-template-columns: 1.1rem var(--sr-slug) minmax(0, 1fr) 1.5rem; column-gap: .55rem; align-items: start;
+  padding: .32rem .25rem .32rem 0; border-radius: 4px;
+  transition: background-color .15s ease;
+}
+.sketch-reveal .sr-rundown .sr-item:hover { background: color-mix(in srgb, currentColor 3.5%, transparent); }
+.sketch-reveal .sr-rundown .sr-item:focus-within { background: var(--sr-row-hi); }
+
+/* pola bez ramek: wygląd tekstu, nie formularza */
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item > input.sr-item-label,
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item > textarea.sr-item-text {
+  margin: 0; padding: 0; min-height: 0; height: auto; width: 100%;
+  border: 0; border-radius: 0; outline: 0; box-shadow: none; background: transparent;
+  color: inherit; caret-color: var(--sr-accent);
+}
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item > input.sr-item-label:focus,
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item > textarea.sr-item-text:focus { outline: 0; box-shadow: none; border: 0; background: transparent; }
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item > input.sr-item-label {
+  justify-self: end; text-align: right;
+  font-size: .78em; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; line-height: 1.85;
+  color: color-mix(in srgb, var(--sr-accent) 78%, currentColor);
+}
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item > input.sr-item-label::placeholder { color: transparent; text-transform: none; letter-spacing: 0; font-weight: 400; transition: color .15s ease; }
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item:hover > input.sr-item-label::placeholder,
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item:focus-within > input.sr-item-label::placeholder { color: var(--sr-ink-soft); }
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item > textarea.sr-item-text {
+  display: block; resize: none; overflow: hidden;
+  font-family: inherit; font-size: 1.05em; line-height: 1.45; text-wrap: pretty;
+}
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item > textarea.sr-item-text::placeholder { color: var(--sr-ink-soft); font-style: italic; }
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item > input.sr-item-label::selection,
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item > textarea.sr-item-text::selection { background: color-mix(in srgb, var(--sr-accent) 32%, transparent); }
+
+/* uchwyt i usuwanie: obecne w układzie (nic nie skacze), widoczne przy wskaźniku / fokusie */
+.sketch-reveal .sr-rundown .sr-item-grip {
+  align-self: stretch; display: grid; place-items: center; width: 1.1rem;
+  cursor: grab; touch-action: none; color: var(--sr-ink-soft); opacity: 0; transition: opacity .15s ease;
+}
+.sketch-reveal .sr-rundown .sr-item-grip svg { width: .6rem; height: 1rem; fill: currentColor; }
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item > button.sr-item-remove {
+  width: 1.5rem; height: 1.5rem; margin: .05rem 0 0; padding: 0; line-height: 1;
+  display: grid; place-items: center; border: 0; border-radius: 4px; background: transparent; box-shadow: none;
+  color: var(--sr-ink-soft); opacity: 0; cursor: pointer; transition: opacity .15s ease, color .15s ease, background-color .15s ease;
+}
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item > button.sr-item-remove svg { width: .7rem; height: .7rem; stroke: currentColor; stroke-width: 2; stroke-linecap: round; fill: none; }
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item:hover > :is(.sr-item-grip, .sr-item-remove),
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item:focus-within > :is(.sr-item-grip, .sr-item-remove) { opacity: 1; }
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item > button.sr-item-remove:hover { color: inherit; background: color-mix(in srgb, currentColor 10%, transparent); }
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item > button.sr-item-remove:focus-visible { opacity: 1; outline: 2px solid var(--sr-accent); outline-offset: 1px; }
+@media (hover: none) { .sketch-reveal .sr-rundown-set .sr-rundown li.sr-item > :is(.sr-item-grip, .sr-item-remove) { opacity: 1; } }
+
+/* licznik pozostałych znaków — tylko przy końcu limitu, w miejscu przycisku usuwania */
+.sketch-reveal .sr-rundown .sr-item-left { grid-column: 3; grid-row: 2; justify-self: end; font-size: .72em; line-height: 1.3; font-variant-numeric: tabular-nums; color: var(--sr-ink-soft); pointer-events: none; }
+.sketch-reveal .sr-rundown .sr-item-left:empty { display: none; }
+.sketch-reveal .sr-rundown .sr-item-near .sr-item-left { color: color-mix(in srgb, var(--sr-accent) 80%, currentColor); }
+.sketch-reveal .sr-rundown-set .sr-rundown li.sr-item > button.sr-item-remove { grid-column: 4; grid-row: 1; }
+
+/* przeciąganie */
+.sketch-reveal .sr-rundown.sr-list-dragging, .sketch-reveal .sr-rundown.sr-list-dragging * { cursor: grabbing; user-select: none; }
+.sketch-reveal .sr-rundown .sr-item.sr-dragging {
+  z-index: 2; background: var(--color-bg-option, color-mix(in srgb, currentColor 12%, Canvas));
+  box-shadow: 0 .35rem 1.1rem rgba(0, 0, 0, .35); transition: none;
+}
+.sketch-reveal .sr-rundown .sr-item.sr-dragging .sr-item-grip { opacity: 1; }
+
+/* pojawienie się nowej wiadomości, przestawienie, etykieta przeniesiona z „ETYKIETA | …” */
+.sketch-reveal .sr-rundown .sr-item.sr-item-new { animation: sr-item-in .22s cubic-bezier(.16, 1, .3, 1); }
+.sketch-reveal .sr-rundown .sr-item.sr-item-moved { animation: sr-item-flash .5s ease-out; }
+.sketch-reveal .sr-rundown .sr-item.sr-item-slugged .sr-item-label { animation: sr-slug-in .28s cubic-bezier(.16, 1, .3, 1); }
+@keyframes sr-item-in { from { opacity: 0; transform: translateY(-.3rem); } }
+@keyframes sr-item-flash { from { background: color-mix(in srgb, var(--sr-accent) 16%, transparent); } }
+@keyframes sr-slug-in { from { opacity: 0; transform: translateX(.6rem); } }
+@media (prefers-reduced-motion: reduce) {
+  .sketch-reveal .sr-rundown .sr-item.sr-item-new, .sketch-reveal .sr-rundown .sr-item.sr-item-slugged .sr-item-label { animation: none; }
+}
+
+.sketch-reveal .sr-items-add { display: flex; gap: .75rem; align-items: baseline; padding-left: 1.65rem; }
+.sketch-reveal .sr-rundown-set .sr-items-add button.sr-item-add {
+  flex: none; width: auto; margin: 0; padding: .2rem .5rem; border: 0; background: transparent; box-shadow: none;
+  color: color-mix(in srgb, var(--sr-accent) 70%, currentColor); font-weight: 600;
+}
+.sketch-reveal .sr-rundown-set .sr-items-add button.sr-item-add:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
+.sketch-reveal .sr-rundown-set .sr-items-add button.sr-item-add:disabled { opacity: .4; }
+.sketch-reveal .sr-items-add .sr-items-keys { margin: 0; }
+.sketch-reveal .sr-on-air-note { display: flex; gap: .5rem; align-items: center; }
+
+/* ================================================================ menedżer: miniatura paska (wg wyglądu) i stan „na antenie” */
+.sketch-reveal .sr-thumb-ticker { position: relative; overflow: hidden; display: block; background: #2a2d35; }
+.sketch-reveal .sr-thumb-ticker > i,
+.sketch-reveal .sr-thumb-ticker > b,
+.sketch-reveal .sr-thumb-ticker > span { position: absolute; display: block; }
+/* broadcast: blok kanału, belka akcentu, jasny pasek */
+.sketch-reveal .sr-thumb-ticker > i { left: 6%; top: 50%; width: 22%; height: 36%; background: #0d1016; }
+.sketch-reveal .sr-thumb-ticker > b { left: 28%; right: 6%; top: 50%; height: 20%; background: var(--srn-accent, #c8102e); }
+.sketch-reveal .sr-thumb-ticker > span { left: 28%; right: 6%; top: 70%; height: 16%; background: #f1f2f4; }
+/* wire: krzywo wklejona taśma, wycinek z tytułem, odcisk pieczątki */
+.sketch-reveal .sr-thumb-ticker[data-look="wire"] > span { left: 4%; right: 4%; top: 62%; height: 22%; background: #ebe6d9; transform: rotate(-2deg); }
+.sketch-reveal .sr-thumb-ticker[data-look="wire"] > b { left: 16%; right: auto; width: 52%; top: 40%; height: 22%; background: #f3efe4; border-top: 2px solid #1e1c18; transform: rotate(-4deg); }
+.sketch-reveal .sr-thumb-ticker[data-look="wire"] > i { left: 8%; top: 66%; width: 13%; height: 13%; background: transparent; border: 1.5px solid var(--srn-accent, #c8102e); transform: rotate(-6deg); }
+/* signal: ciemne pasmo ze skosem, szyna akcentu, płytka tytułu */
+.sketch-reveal .sr-thumb-ticker[data-look="signal"] > span { left: 6%; right: 6%; top: 60%; height: 24%; background: #0b1017; clip-path: polygon(0 0, 100% 0, 92% 100%, 0 100%); }
+.sketch-reveal .sr-thumb-ticker[data-look="signal"] > b { left: 6%; right: 6%; top: 58%; height: 2px; background: var(--srn-accent, #c8102e); }
+.sketch-reveal .sr-thumb-ticker[data-look="signal"] > i { left: 6%; top: 38%; width: 50%; height: 20%; background: #0b1017; clip-path: polygon(0 0, 88% 0, 100% 100%, 0 100%); }
+.sketch-reveal .sr-row.sr-on-air { background: color-mix(in srgb, var(--srn-accent, #c8102e) 14%, transparent); }
+.sketch-reveal .sr-air-badge { font-weight: 700; color: var(--color-text-primary, inherit); }
+.sketch-reveal .sr-actions button.sr-air-on { background: var(--srn-accent, #c8102e); color: var(--srn-on-accent, #fff); border-color: transparent; }
+.sketch-reveal .sr-toolbar .sr-air-stop { margin-left: auto; }

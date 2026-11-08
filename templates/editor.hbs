@@ -16,6 +16,7 @@
       </div>
       <p class="hint">{{localize "SKETCHREVEAL.Hint.Kind"}}</p>
     </div>
+    {{#unless noImages}}
     <div class="form-group">
       <label>{{localize "SKETCHREVEAL.Field.Sketch"}}</label>
       <div class="form-fields"><file-picker name="meta.sketch" type="image" value="{{meta.sketch}}"></file-picker></div>
@@ -34,6 +35,7 @@
       <p class="hint">{{localize "SKETCHREVEAL.AIGen.Hint"}}</p>
     </div>
     {{/if}}
+    {{/unless}}
   </fieldset>
   {{else}}
   <p class="notes">{{localize "SKETCHREVEAL.Editor.SceneNote"}}</p>
@@ -42,8 +44,9 @@
 </div>
 <footer class="form-footer">
   <button type="button" data-action="preview"><i class="fa-solid fa-play"></i> {{localize "SKETCHREVEAL.Editor.Preview"}}</button>
+  {{#if isTicker}}<button type="button" data-action="applyLive" data-tooltip="SKETCHREVEAL.Ticker.ApplyHint"><i class="fa-solid fa-check"></i> {{localize "SKETCHREVEAL.Ticker.Apply"}}</button>{{/if}}
   {{#if canOptimize}}<button type="button" data-action="optimizeImages" data-tooltip="SKETCHREVEAL.Optimize.Hint"><i class="fa-solid fa-compress"></i> {{localize "SKETCHREVEAL.Optimize.Button"}}</button>{{/if}}
-  <button type="button" data-action="exportWebm"><i class="fa-solid fa-film"></i> {{localize "SKETCHREVEAL.Export.Button"}}</button>
+  {{#unless noImages}}<button type="button" data-action="exportWebm"><i class="fa-solid fa-film"></i> {{localize "SKETCHREVEAL.Export.Button"}}</button>{{/unless}}
   <button type="submit"><i class="fa-solid fa-floppy-disk"></i> {{saveLabel}}</button>
 </footer>
 </div>

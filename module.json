@@ -16,7 +16,8 @@
     "scripts/main.mjs"
   ],
   "styles": [
-    "styles/reveal.css"
+    "styles/reveal.css",
+    "styles/ticker.css"
   ],
   "languages": [
     {

@@ -5,7 +5,8 @@ import { RevealEditor } from "./apps.mjs";
 import { exportRevealWebm } from "./export-ui.mjs";
 import { playSplash } from "./play.mjs";
 import { aiApi, aiBusy, aiGeneratePainted, aiGenerateSketch, aiGuard } from "./ai-image.mjs";
-import { getPreset, listPresets, resolveScene, sceneBackground, sceneFlags } from "./store.mjs";
+import { getPreset, isNewspaper, listPresets, resolveNewspaper, resolveScene, sceneBackground, sceneFlags } from "./store.mjs";
+import { previewNewspaper } from "./newspaper-play.mjs";
 
 const TAB = "sketchreveal";
 const T = (k, d) => (d ? game.i18n.format(`SKETCHREVEAL.${k}`, d) : game.i18n.localize(`SKETCHREVEAL.${k}`));
@@ -15,7 +16,7 @@ const aiKey = (scene) => `scene:${scene.id}`;
 function tabHtml(scene, active) {
   const f = sceneFlags(scene);
   const F = `flags.${MODULE_ID}`;
-  const presets = listPresets();
+  const presets = listPresets().filter((p) => p.kind !== "ticker"); // pasek wiadomości nie jest przejściem sceny
   // preset usunięty/niedostępny: zaznacz osobną opcję, żeby zapis sceny nie wyczyścił po cichu powiązania
   const missing = f.presetId && !getPreset(f.presetId)
     ? [`<option value="${esc(f.presetId)}" selected>${esc(T("Scene.MissingPreset"))}: ${esc(f.presetId)}</option>`] : [];
@@ -131,6 +132,8 @@ export function onRenderSceneConfig(app, html) {
 
   tab.querySelector('[data-sr="edit"]').addEventListener("click", () => {
     if (!sceneFlags(app.document).presetId) return ui.notifications.warn(T("Scene.PickPreset"));
+    // gazeta nie ma nadpisań per scena (zrzut widoku zamiast obrazów; ustawienia tylko w presecie)
+    if (isNewspaper(getPreset(sceneFlags(app.document).presetId))) return ui.notifications.info(T("Newspaper.NoOverrides"));
     new RevealEditor({ scene: app.document }).render({ force: true });
   });
   tab.querySelector('[data-sr="reset"]').addEventListener("click", async () => {
@@ -143,6 +146,8 @@ export function onRenderSceneConfig(app, html) {
     exportRevealWebm({ sketchUrl: r.sketchUrl, paintedUrl: r.paintedUrl, config: r.config, hints: r.hints, hintsStrict: r.hintsStrict, name: app.document.name });
   });
   tab.querySelector('[data-sr="preview"]').addEventListener("click", () => {
+    const np = resolveNewspaper(app.document);
+    if (np) return previewNewspaper(np.newspaper); // podgląd na bieżącym widoku (bez zmiany sceny)
     const r = resolveScene(app.document);
     if (!r) return ui.notifications.warn(T("Scene.NothingToPreview"));
     playSplash({ sketchUrl: r.sketchUrl, paintedUrl: r.paintedUrl, config: r.config, hints: r.hints, hintsStrict: r.hintsStrict });

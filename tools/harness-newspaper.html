@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>harness-newspaper</title>
+<style>
+/* lokalna kopia Amiri (ten sam plik, który Foundry serwuje z /fonts/amiri) — w Foundry krój deklaruje sam rdzeń */
+@font-face { font-family: "Amiri"; src: url("fonts/amiri-regular.woff2") format("woff2"); font-weight: 400; }
+@font-face { font-family: "Amiri"; src: url("fonts/amiri-bold.woff2") format("woff2"); font-weight: 700; }
+@font-face { font-family: "Signika"; src: url("fonts/signika-medium.woff2") format("woff2"); font-weight: 400 500; }
+@font-face { font-family: "Signika"; src: url("fonts/signika-semibold.woff2") format("woff2"); font-weight: 600; }
+@font-face { font-family: "Signika"; src: url("fonts/signika-bold.woff2") format("woff2"); font-weight: 700; }
+html,body{margin:0;height:100%;overflow:hidden;background:#111;color:#ddd;font:13px/1.35 system-ui,sans-serif}
+/* „stara” mapa: rysowana na płótnie (jak płótno Foundry) — z niego robimy zrzut; „nowa” mapa leży pod spodem */
+/* nowa scena: obraz mapy w „świecie” (kontener = kamera, transform jak stage w Foundry); z paddingiem tło sceny widać wokół */
+#newmap{position:fixed;inset:0;overflow:hidden;background:#222}
+#newcam{position:absolute;left:0;top:0;width:100%;height:100%;transform-origin:0 0}
+#newimg{position:absolute;display:block}
+#oldmap{position:fixed;inset:0;width:100%;height:100%;display:block}
+#oldmap.gone{visibility:hidden}
+.fake{position:fixed;background:rgba(20,18,26,.82);border:1px solid rgba(255,255,255,.12);display:none;z-index:50}
+body.ui .fake{display:block}
+#f-left{left:16px;top:16px;width:72px;bottom:16px}
+#f-side{right:0;top:0;bottom:0;width:300px}
+#f-hot{bottom:16px;height:60px;left:50%;width:560px;transform:translateX(-50%)}
+#host{position:fixed;inset:0;z-index:20;pointer-events:none}
+#panel{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:100;width:min(980px,calc(100% - 24px));background:rgba(12,12,16,.92);
+  border:1px solid #333;border-radius:8px;padding:8px 10px;display:grid;gap:6px}
+#panel.min .more{display:none}
+#panel label{display:inline-flex;gap:4px;align-items:center;margin-right:8px;white-space:nowrap}
+#panel input[type=text]{background:#000;color:#eee;border:1px solid #444;width:170px}
+#panel button{background:#2b2b35;color:#eee;border:1px solid #555;border-radius:4px;padding:3px 9px;cursor:pointer}
+#panel button:hover{background:#3a3a48}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+#log{font:11px ui-monospace,monospace;opacity:.8;min-height:1.3em}
+body.clean #panel{display:none}
+</style></head><body class="ui">
+<div id="newmap"><div id="newcam"><img id="newimg" alt=""></div></div>
+<canvas id="oldmap"></canvas>
+<div class="fake" id="f-left"></div><div class="fake" id="f-side"></div><div class="fake" id="f-hot"></div>
+<div id="host"></div>
+<div id="panel">
+  <div class="row">
+    <button id="run">▶ Zmiana sceny (całość)</button><button id="press">1. uformuj</button><button id="spin">2. odlot</button>
+    <button id="close">■ zamknij</button><button id="toggle">zwiń panel</button>
+  </div>
+  <div class="row more">
+    <label><input id="ui" type="checkbox" checked> atrapy UI Foundry</label>
+    <label><input id="reduced" type="checkbox"> reduced motion</label>
+    <label><input id="lite" type="checkbox"> lite</label>
+    <label title="jak „Core Rules”: mała mapa na środku dużego pola koloru tła sceny (stara i nowa scena)"><input id="pad" type="checkbox"> tło sceny (padding)</label>
+    <label>stara mapa <select id="old"><option value="ulica">ulica</option><option value="baza">baza</option><option value="miasto">miasto</option></select></label>
+    <label>nowa <select id="new"><option value="miasto">miasto</option><option value="ulica">ulica</option><option value="baza">baza</option></select></label>
+  </div>
+  <div class="row more">
+    <label>wygląd <select id="style"><option value="classic">klasyczna</option><option value="modern">współczesna</option></select></label>
+    <label>winieta <input id="masthead" type="text" value="Kurier Wieczorny"></label>
+    <label>nagłówek <input id="headline" type="text" value="" placeholder="puste = udawany"></label>
+    <label>papier <input id="paper" type="color" value="#ebe3cf"></label>
+    <label>akcent <input id="accent" type="color" value="#d0121b"></label>
+  </div>
+  <div class="row more">
+    <label>odlot (s) <input id="spinSec" type="number" value="2.4" min="1" max="5" step="0.1" style="width:52px"></label>
+    <label>obroty <input id="turns" type="number" value="3" min="1" max="6" step="1" style="width:44px"></label>
+    <label>kierunek <select id="direction"><option value="cw">zgodnie</option><option value="ccw">przeciwnie</option></select></label>
+    <label>ziarno <input id="seed" type="number" value="7" style="width:70px"></label>
+  </div>
+  <div id="log" class="more"></div>
+</div>
+<script type="module">
+import { createNewspaper, sanitizeNewspaper, HOLD_MS, PRESS_MS, PUSH_MS, photoCrop, sameRect, coverView, cameraEase, revealCameraMs, REVEAL_ZOOM } from "../scripts/fx/newspaper.mjs";
+const $ = (id) => document.getElementById(id);
+const log = (m) => { $("log").textContent = m; console.log("[newspaper]", m); };
+const img = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
+const data = () => sanitizeNewspaper({ style: $("style").value, accent: $("accent").value, masthead: $("masthead").value, headline: $("headline").value, paper: $("paper").value,
+  spinSec: +$("spinSec").value, turns: +$("turns").value, direction: $("direction").value });
+/** Te same odstępy, które w Foundry liczy uiBounds() (kolumna narzędzi, pasek boczny, pasek makr). */
+function safe() {
+  if (!$("ui").checked) return { left: 16, right: 16, top: 16, bottom: 16 };
+  const l = $("f-left").getBoundingClientRect(), s = $("f-side").getBoundingClientRect(), h = $("f-hot").getBoundingClientRect();
+  return { left: l.right + 12, right: innerWidth - s.left + 12, top: 16, bottom: innerHeight - h.top + 10 };
+}
+/* „Świat” = px ekranu w spoczynku. Bez paddingu mapa wypełnia ekran (cover); z paddingiem leży mała w polu koloru tła
+   (jak scena „Core Rules”: duży niebieski padding), lekko poza środkiem, żeby kadr musiał się przesunąć, nie tylko powiększyć. */
+const PAD_BG = "#2f5f9e", NEW_BG = "#3d6b2f";
+const images = {};
+const loadImg = async (name) => (images[name] ??= await img(`../samples/${name}/painted.png`));
+function sceneRect(i, padded, fx = 0.46, fy = 0.54) {
+  const W = innerWidth, H = innerHeight;
+  if (!padded) { const k = Math.max(W / i.naturalWidth, H / i.naturalHeight); return { x: (W - i.naturalWidth * k) / 2, y: (H - i.naturalHeight * k) / 2, w: i.naturalWidth * k, h: i.naturalHeight * k }; }
+  const w = W * 0.4, h = (w * i.naturalHeight) / i.naturalWidth;
+  return { x: W * fx - w / 2, y: H * fy - h / 2, w, h };
+}
+/** Narysuj scenę (tło + mapa + siatka sceny) kamerą view = {x, y (lewy górny róg w świecie), k (px płótna na jedn. świata)}. */
+function drawScene(g, cw, ch, i, rect, view, bg) {
+  g.fillStyle = bg; g.fillRect(0, 0, cw, ch);
+  const X = (x) => (x - view.x) * view.k, Y = (y) => (y - view.y) * view.k;
+  g.drawImage(i, X(rect.x), Y(rect.y), rect.w * view.k, rect.h * view.k);
+  g.save(); g.beginPath(); g.rect(X(rect.x), Y(rect.y), rect.w * view.k, rect.h * view.k); g.clip();
+  g.strokeStyle = "rgba(0,0,0,.18)"; g.lineWidth = 1;
+  for (let x = rect.x; x < rect.x + rect.w; x += 100) { g.beginPath(); g.moveTo(Math.round(X(x)) + 0.5, Y(rect.y)); g.lineTo(Math.round(X(x)) + 0.5, Y(rect.y + rect.h)); g.stroke(); }
+  for (let y = rect.y; y < rect.y + rect.h; y += 100) { g.beginPath(); g.moveTo(X(rect.x), Math.round(Y(y)) + 0.5); g.lineTo(X(rect.x + rect.w), Math.round(Y(y)) + 0.5); g.stroke(); }
+  g.restore();
+}
+let oldScene = null, newScene = null;
+/** „Płótno Foundry”: stara mapa narysowana jak scena (w Foundry: stage z paddingiem i kolorem tła). */
+async function drawOld() {
+  const c = $("oldmap"); c.width = innerWidth; c.height = innerHeight;
+  const pad = $("pad").checked;
+  const i = await loadImg($("old").value);
+  oldScene = { i, rect: sceneRect(i, pad) };
+  drawScene(c.getContext("2d"), c.width, c.height, i, oldScene.rect, { x: 0, y: 0, k: 1 }, PAD_BG);
+  // nowa scena: kamera w widoku startowym (z paddingiem — widać tło dookoła)
+  const n = await loadImg($("new").value);
+  newScene = { i: n, rect: sceneRect(n, pad, 0.55, 0.47) };
+  $("newmap").style.background = pad ? NEW_BG : "#222";
+  const im = $("newimg"); im.src = n.src;
+  Object.assign(im.style, { left: `${newScene.rect.x}px`, top: `${newScene.rect.y}px`, width: `${newScene.rect.w}px`, height: `${newScene.rect.h}px` });
+  $("newcam").getAnimations().forEach((a) => a.cancel());
+  $("newcam").style.transform = "none";
+}
+/**
+ * Zrzut „płótna” jak captureView() w Foundry: `cover` = dokładnie ekran; gdy widać tło poza sceną — `photo` = scena
+ * wyrenderowana jeszcze raz kamerą na kadrze photoCrop (pełna rozdzielczość), `crop` = kadr w px ekranu. ≤ 1920 px.
+ */
+function capture() {
+  const src = $("oldmap"), k = Math.min(1, 1920 / src.width);
+  const c = document.createElement("canvas"); c.width = Math.round(src.width * k); c.height = Math.round(src.height * k);
+  c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
+  const view = { x: 0, y: 0, w: innerWidth, h: innerHeight };
+  const crop = photoCrop(view, oldScene.rect, innerWidth / innerHeight);
+  if (sameRect(crop, view, 1)) return { photo: c, cover: null, crop: null };
+  const p = document.createElement("canvas"); p.width = c.width; p.height = c.height;
+  drawScene(p.getContext("2d"), p.width, p.height, oldScene.i, oldScene.rect, { x: crop.x, y: crop.y, k: p.width / crop.w }, PAD_BG);
+  return { photo: p, cover: c, crop };
+}
+/**
+ * Kamera odsłony (jak frameRevealCamera w Foundry): kadr nowej sceny bez tła (coverView), start REVEAL_ZOOM bliżej,
+ * osiadanie przez czas odlotu tą samą krzywą (Foundry: canvas.animatePan interpoluje x, y, scale z easingiem).
+ */
+function revealCamera(reducedMotion) {
+  const W = innerWidth, H = innerHeight, screen = { w: W, h: H }, r = newScene.rect;
+  const target = coverView({ x: W / 2, y: H / 2, scale: 1 }, r, screen);
+  const start = coverView({ x: target.x, y: target.y, scale: target.scale * REVEAL_ZOOM }, r, screen);
+  const tf = (v) => `translate(${(W / 2 - v.x * v.scale).toFixed(2)}px, ${(H / 2 - v.y * v.scale).toFixed(2)}px) scale(${v.scale.toFixed(5)})`;
+  const cam = $("newcam");
+  cam.getAnimations().forEach((a) => a.cancel());
+  if (reducedMotion) { cam.style.transform = tf(target); return; }
+  const kf = [];
+  for (let i = 0; i <= 40; i++) {
+    const e = cameraEase(i / 40), lerp = (a, b) => a + (b - a) * e;
+    kf.push({ transform: tf({ x: lerp(start.x, target.x), y: lerp(start.y, target.y), scale: lerp(start.scale, target.scale) }), offset: i / 40 });
+  }
+  cam.style.transform = tf(target);
+  cam.animate(kf, { duration: revealCameraMs(data().spinSec), easing: "linear" });
+}
+let np = null;
+function begin() {
+  np?.dispose();
+  const t0 = performance.now();
+  const { photo, cover, crop } = capture();
+  const cap = performance.now() - t0;
+  np = createNewspaper({ host: $("host"), photo, cover, crop, coverBg: PAD_BG, data: data(), reduced: $("reduced").checked, lite: $("lite").checked, safe: safe(), seed: +$("seed").value, family: "Amiri", sansFamily: "Signika" });
+  window.np = np;
+  $("oldmap").classList.add("gone"); // „teardown”: stara scena znika, pod spodem nowa
+  np.ready.then(() => log(`zrzut ${cap.toFixed(1)} ms · strona ${np.stats.pageW}px w ${np.stats.buildMs} ms · najazd ${np.stats.pushIn ? JSON.stringify(Object.fromEntries(Object.entries(np.stats.crop).map(([k, v]) => [k, Math.round(v)]))) : "nie"}`));
+  return np;
+}
+async function run() {
+  const n = begin();
+  await n.press();
+  await new Promise((r) => setTimeout(r, HOLD_MS + 400)); // w Foundry: czekanie na wspólny start (tgo)
+  revealCamera(n.stats.reduced);
+  await n.spin();
+  log(`koniec · ${JSON.stringify(n.stats)}`);
+  await reset();
+}
+async function reset() { $("oldmap").classList.remove("gone"); await drawOld(); }
+$("run").onclick = run;
+$("press").onclick = () => begin().press();
+$("spin").onclick = () => { if (!np) return; revealCamera(np.stats.reduced); np.spin().then(reset); };
+$("close").onclick = () => { np?.close(); reset(); };
+$("toggle").onclick = () => $("panel").classList.toggle("min");
+$("ui").onchange = () => document.body.classList.toggle("ui", $("ui").checked);
+$("old").onchange = drawOld; $("new").onchange = drawOld; $("pad").onchange = drawOld;
+addEventListener("resize", drawOld);
+/** Do weryfikacji: zatrzymaj wszystkie animacje na czasie t (ms) od startu bieżącej fazy. */
+const freeze = async (t) => {
+  const all = document.getAnimations();
+  // tylko animacje bieżącej fazy (najpóźniej uruchomione); wcześniejsze zostają w stanie końcowym
+  const last = Math.max(...all.map((a) => a.startTime ?? -Infinity));
+  for (const a of all) {
+    if ((a.startTime ?? last) < last - 100 && a.effect.getComputedTiming().endTime < 10000) { a.finish(); continue; }
+    a.pause(); a.currentTime = Math.min(t, a.effect.getComputedTiming().endTime);
+  }
+  for (let i = 0; i < 3; i++) await new Promise((r) => requestAnimationFrame(r));
+};
+/** Nieruchoma klatka do zrzutów ekranu: faza "press" | "spin" w chwili t (ms) — np.seek() używa tych samych funkcji stanu. */
+async function still(phase, t) {
+  if (!np || np.closed || !still.keep) { begin(); still.keep = true; }
+  await np.ready;
+  const dur = phase === "spin" ? data().spinSec * 1000 : phase === "push" ? PUSH_MS : PRESS_MS;
+  await np.seek(phase, Math.min(1, t / dur));
+  // kamera odsłony w tej samej chwili odlotu (statycznie)
+  if (phase === "spin") { revealCamera(false); for (const a of $("newcam").getAnimations()) { a.pause(); a.currentTime = Math.min(t, revealCameraMs(data().spinSec)); } }
+  await new Promise((r) => setTimeout(r, 80));
+  return np;
+}
+window.harness = { run, begin, reset, freeze, still, data, safe, capture, revealCamera, set: (o) => { for (const [k, v] of Object.entries(o)) { const el = $(k); if (el.type === "checkbox") el.checked = v; else el.value = v; el.onchange?.(); } } };
+const q = new URLSearchParams(location.search);
+if (q.has("pad")) $("pad").checked = true;
+await drawOld();
+if (q.has("clean")) document.body.classList.add("clean");
+if (q.get("style") === "modern") { $("style").value = "modern"; $("masthead").value = "EXPRESS"; }
+if (q.has("auto")) run();
+window.ready = true;
+</script></body></html>

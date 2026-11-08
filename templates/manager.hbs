@@ -4,6 +4,9 @@
     <button type="button" data-action="newPreset"><i class="fa-solid fa-plus"></i> {{localize "SKETCHREVEAL.Manager.New"}}</button>
     <button type="button" data-action="importPreset"><i class="fa-solid fa-file-import"></i> {{localize "SKETCHREVEAL.Manager.Import"}}</button>
     <button type="button" data-action="closeAll"><i class="fa-solid fa-circle-xmark"></i> {{localize "SKETCHREVEAL.Manager.CloseAll"}}</button>
+    {{#if onAirName}}
+    <button type="button" class="sr-air-stop" data-action="tickerStop" data-tooltip="SKETCHREVEAL.Ticker.Stop"><i class="fa-solid fa-tower-broadcast"></i> {{localize "SKETCHREVEAL.Manager.TakeDown"}}</button>
+    {{/if}}
     {{/if}}
   </header>
   <div class="sr-list">
@@ -31,6 +34,24 @@
     {{else}}<p class="notes">{{localize "SKETCHREVEAL.Manager.Empty"}}</p>{{/each}}
     <h3>{{localize "SKETCHREVEAL.Manager.Transitions"}}</h3>
     {{#each transitions as |p|}}
+    {{#if p.isNewspaper}}
+    <article class="sr-row" data-preset="{{p.id}}">
+      <div class="sr-thumb sr-thumb-news" style="--srnp-paper: {{p.paper}}" aria-hidden="true"><b></b><i></i><span></span></div>
+      <div class="sr-info">
+        <strong>{{p.name}}</strong>
+        <span class="sr-meta">{{p.effectLabel}}{{#if p.builtin}} · {{localize "SKETCHREVEAL.Manager.Builtin"}}{{/if}}</span>
+      </div>
+      <div class="sr-actions">
+        <button type="button" class="icon fa-solid fa-play" data-action="playLocal" data-tooltip="SKETCHREVEAL.Newspaper.Preview"></button>
+        {{#if ../isGM}}
+        <button type="button" class="icon fa-solid fa-pen-to-square" data-action="editPreset" data-tooltip="SKETCHREVEAL.Manager.Edit"></button>
+        <button type="button" class="icon fa-solid fa-file-export" data-action="exportPreset" data-tooltip="SKETCHREVEAL.Manager.Export"></button>
+        <button type="button" class="icon fa-solid fa-copy" data-action="duplicatePreset" data-tooltip="SKETCHREVEAL.Manager.Duplicate"></button>
+        {{#unless p.builtin}}<button type="button" class="icon fa-solid fa-trash" data-action="deletePreset" data-tooltip="SKETCHREVEAL.Manager.Delete"></button>{{/unless}}
+        {{/if}}
+      </div>
+    </article>
+    {{else}}
     <article class="sr-row" data-preset="{{p.id}}">
       <img class="sr-thumb" src="{{p.painted}}" loading="lazy" alt="" data-tooltip="SKETCHREVEAL.Manager.DragHint">
       <div class="sr-info">
@@ -42,6 +63,27 @@
         {{#if ../isGM}}
         <button type="button" class="icon fa-solid fa-users" data-action="playAll" data-tooltip="SKETCHREVEAL.Manager.PlayAll"></button>
         <button type="button" class="icon fa-solid fa-cloud-arrow-down" data-action="preloadAll" data-tooltip="SKETCHREVEAL.Manager.Preload"></button>
+        <button type="button" class="icon fa-solid fa-pen-to-square" data-action="editPreset" data-tooltip="SKETCHREVEAL.Manager.Edit"></button>
+        <button type="button" class="icon fa-solid fa-file-export" data-action="exportPreset" data-tooltip="SKETCHREVEAL.Manager.Export"></button>
+        <button type="button" class="icon fa-solid fa-copy" data-action="duplicatePreset" data-tooltip="SKETCHREVEAL.Manager.Duplicate"></button>
+        {{#unless p.builtin}}<button type="button" class="icon fa-solid fa-trash" data-action="deletePreset" data-tooltip="SKETCHREVEAL.Manager.Delete"></button>{{/unless}}
+        {{/if}}
+      </div>
+    </article>
+    {{/if}}
+    {{else}}<p class="notes">{{localize "SKETCHREVEAL.Manager.Empty"}}</p>{{/each}}
+    <h3>{{localize "SKETCHREVEAL.Manager.Tickers"}}</h3>
+    {{#each tickers as |p|}}
+    <article class="sr-row{{#if p.onAir}} sr-on-air{{/if}}" data-preset="{{p.id}}" style="--srn-accent: {{p.accent}}; --srn-on-accent: {{p.onAccent}}">
+      <div class="sr-thumb sr-thumb-ticker" data-look="{{p.look}}" data-tooltip="SKETCHREVEAL.Manager.DragHintTicker" aria-hidden="true"><i></i><b></b><span></span></div>
+      <div class="sr-info">
+        <strong>{{p.name}}</strong>
+        <span class="sr-meta">{{#if p.onAir}}<span class="sr-air-badge"><i class="fa-solid fa-tower-broadcast"></i> {{localize "SKETCHREVEAL.Manager.OnAir"}}</span> · {{/if}}{{p.tickerMeta}}{{#if p.builtin}} · {{localize "SKETCHREVEAL.Manager.Builtin"}}{{/if}}</span>
+      </div>
+      <div class="sr-actions">
+        <button type="button" class="icon fa-solid fa-eye" data-action="tickerPreview" data-tooltip="SKETCHREVEAL.Manager.TickerPreview"></button>
+        {{#if ../isGM}}
+        <button type="button" class="icon fa-solid fa-tower-broadcast{{#if p.onAir}} sr-air-on{{/if}}" data-action="tickerAir" aria-pressed="{{#if p.onAir}}true{{else}}false{{/if}}" data-tooltip="{{#if p.onAir}}SKETCHREVEAL.Ticker.Stop{{else}}SKETCHREVEAL.Manager.AirOn{{/if}}"></button>
         <button type="button" class="icon fa-solid fa-pen-to-square" data-action="editPreset" data-tooltip="SKETCHREVEAL.Manager.Edit"></button>
         <button type="button" class="icon fa-solid fa-file-export" data-action="exportPreset" data-tooltip="SKETCHREVEAL.Manager.Export"></button>
         <button type="button" class="icon fa-solid fa-copy" data-action="duplicatePreset" data-tooltip="SKETCHREVEAL.Manager.Duplicate"></button>

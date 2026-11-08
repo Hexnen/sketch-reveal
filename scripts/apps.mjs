@@ -6,7 +6,12 @@ import { aiApi, aiBusy, aiGeneratePainted, aiGenerateSketch, aiGuard } from "./a
 import { applyShowIf, configFormHtml, readForm } from "./form.mjs";
 import { broadcastClose, playSplash, preloadForAll, showSplashToAll } from "./play.mjs";
 import { detectLightHints } from "./fx/ai-hints.mjs";
-import { BUILTIN_PRESETS, deletePreset, getPreset, listPresets, presetPayload, sceneBackground, sceneFlags, savePreset } from "./store.mjs";
+import { BUILTIN_PRESETS, deletePreset, getPreset, isNewspaper, isTicker, listPresets, presetPayload, sceneBackground, sceneFlags, savePreset } from "./store.mjs";
+import { DEFAULT_TICKER, inkOn, sanitizeTicker } from "./fx/ticker.mjs";
+import { bindTickerItems, readTickerForm, tickerFormHtml } from "./ticker-form.mjs";
+import { onAirPresetId, previewTicker, startTicker, stopTicker, toggleTicker } from "./ticker-play.mjs";
+import { DEFAULT_NEWSPAPER, sanitizeNewspaper } from "./fx/newspaper.mjs";
+import { newspaperFormHtml, previewNewspaper } from "./newspaper-play.mjs";
 import { EFFECTS } from "../vendor/reveal-core.js";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
@@ -20,7 +25,10 @@ export const payloadOf = presetPayload;
 /** Pokaż preset wszystkim (używane przez makra z paska). Tylko GM; gracz nie dostaje żadnych powiadomień modułu. */
 export function showPresetToAll(presetId) {
   if (!game.user.isGM) return console.warn(`${MODULE_ID} | tylko GM może pokazać splash wszystkim`);
-  if (!getPreset(presetId)) return ui.notifications.warn(T("Macro.Missing"));
+  const p = getPreset(presetId);
+  if (!p) return ui.notifications.warn(T("Macro.Missing"));
+  if (isTicker(p)) return toggleTicker(presetId);
+  if (isNewspaper(p)) return ui.notifications.warn(T("Newspaper.NotForAll")); // gazeta gra przy zmianie sceny, nie na żądanie
   return showSplashToAll(presetId);
 }
 
@@ -51,17 +59,67 @@ async function makeSquareIcon(presetId, paintedUrl, size = 256) {
   } catch (e) { console.warn(`${MODULE_ID} | ikona makra`, e); return null; }
 }
 
+/** Ikona makra paska wiadomości: miniatura pakietu w danym wyglądzie (broadcast / wire / signal) na ciemnym tle. */
+async function makeTickerIcon(presetId, accent, look = "broadcast", size = 256) {
+  try {
+    const c = document.createElement("canvas");
+    c.width = c.height = size;
+    const g = c.getContext("2d"), u = size / 16;
+    g.fillStyle = "#1d2027"; g.fillRect(0, 0, size, size);
+    if (look === "wire") {
+      // krzywo wklejona taśma, wycinek z tytułem, odcisk pieczątki
+      g.save(); g.translate(size / 2, u * 10); g.rotate(-0.035);
+      g.fillStyle = "#ebe6d9"; g.fillRect(-u * 7, -u * 1.3, u * 14, u * 2.6);
+      g.strokeStyle = accent; g.lineWidth = u * 0.28; g.strokeRect(-u * 6.2, -u * 0.75, u * 2.8, u * 1.5);
+      g.fillStyle = "#1e1c18"; g.fillRect(-u * 2.6, -u * 0.3, u * 8, u * 0.6);
+      g.restore();
+      g.save(); g.translate(u * 6.5, u * 7.2); g.rotate(-0.06);
+      g.fillStyle = "#f3efe4"; g.fillRect(-u * 4, -u * 1.2, u * 8, u * 2.4);
+      g.fillStyle = "#1e1c18"; g.fillRect(-u * 4, -u * 1.2, u * 8, u * 0.35); g.fillRect(-u * 3.3, -u * 0.2, u * 6, u * 0.75);
+      g.restore();
+    } else if (look === "signal") {
+      const band = (x, y, w, h, cut, flip) => { g.beginPath(); g.moveTo(x, y); g.lineTo(x + w - (flip ? cut : 0), y); g.lineTo(x + w - (flip ? 0 : cut), y + h); g.lineTo(x, y + h); g.closePath(); g.fill(); };
+      g.fillStyle = "#0b1017"; band(u * 1.5, u * 8.6, u * 13, u * 3, u * 1.2, false);   // pasmo
+      band(u * 1.5, u * 6, u * 8, u * 2.4, u * 1, true);                                   // płytka tytułu
+      g.fillStyle = accent; g.fillRect(u * 1.5, u * 8.45, u * 13, u * 0.3);                // szyna
+      band(u * 1.5, u * 8.75, u * 3.8, u * 2.85, u * 0.9, false);                         // zakładka kanału
+      g.fillStyle = "#e7eef4"; g.fillRect(u * 6.4, u * 9.9, u * 6, u * 0.55); g.fillRect(u * 2.3, u * 6.9, u * 5, u * 0.7);
+    } else {
+      g.fillStyle = "#0d1016"; g.fillRect(u * 1.5, u * 6.5, u * 4, u * 5);          // blok kanału
+      g.fillStyle = accent; g.fillRect(u * 2.2, u * 8.9, u * 2.6, u * 0.9);          // znacznik „na żywo”
+      g.fillRect(u * 5.5, u * 6.5, u * 9, u * 2.7);                                  // belka
+      g.fillStyle = "#f1f2f4"; g.fillRect(u * 5.5, u * 9.2, u * 9, u * 2.3);         // pasek
+      g.fillStyle = "#0d1016"; g.fillRect(u * 6.3, u * 10, u * 6, u * 0.7);          // „tekst” na pasku
+      g.fillStyle = "rgba(255,255,255,.85)"; g.fillRect(u * 6.3, u * 7.4, u * 5.5, u * 0.9); // „tytuł” na belce
+    }
+    const blob = await new Promise((res) => c.toBlob(res, "image/webp", 0.92));
+    if (!blob) return null;
+    const FP = foundry.applications.apps.FilePicker.implementation;
+    const dir = `worlds/${game.world.id}/${MODULE_ID}`;
+    try { await FP.createDirectory("data", dir, {}); } catch { /* katalog już istnieje */ }
+    const name = `${presetId}.webp`;
+    const res = await FP.upload("data", dir, new File([blob], name, { type: "image/webp" }), {}, { notify: false, optimized: true });
+    return res?.path ?? `${dir}/${name}`;
+  } catch (e) { console.warn(`${MODULE_ID} | ikona makra paska`, e); return null; }
+}
+
 /** Makro „pokaż wszystkim” dla presetu (jedno na preset — istniejące jest używane ponownie); przypisuje je do slotu paska. */
 export async function createPresetMacro(presetId, slot) {
   const p = getPreset(presetId);
   if (!p) return ui.notifications.warn(T("Macro.Missing"));
+  if (isNewspaper(p)) return ui.notifications.warn(T("Newspaper.NotForAll"));
   let macro = game.macros.find((m) => m.getFlag(MODULE_ID, "presetId") === presetId);
-  const icon = (await makeSquareIcon(presetId, p.painted)) ?? p.painted ?? "icons/svg/clapperboard.svg";
+  const icon = isTicker(p)
+    ? (await makeTickerIcon(presetId, sanitizeTicker(p.ticker).accent, sanitizeTicker(p.ticker).look)) ?? "icons/svg/sound.svg"
+    : (await makeSquareIcon(presetId, p.painted)) ?? (p.painted || "icons/svg/clapperboard.svg");
   if (macro && macro.img !== icon) await macro.update({ img: icon }); // stare makra z rozciągniętym obrazem dostają kwadratową ikonę
   if (!macro) {
     macro = await Macro.implementation.create({
       name: p.name, type: "script", img: icon,
-      command: `// Sketch Reveal: pokaż preset wszystkim (czeka, aż wszyscy będą gotowi)
+      command: isTicker(p)
+        ? `// Sketch Reveal: pasek wiadomości — nadaj wszystkim / zdejmij (przełącznik)
+game.modules.get("${MODULE_ID}").api.ticker.toggle(${JSON.stringify(presetId)});`
+        : `// Sketch Reveal: pokaż preset wszystkim (czeka, aż wszyscy będą gotowi)
 game.modules.get("${MODULE_ID}").api.showToAll(${JSON.stringify(presetId)});`,
       flags: { [MODULE_ID]: { presetId } },
     });
@@ -80,7 +138,7 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     window: { icon: "fa-solid fa-paintbrush", resizable: true },
     position: { width: 560, height: 720 },
     form: { handler: RevealEditor.#onSubmit, closeOnSubmit: true },
-    actions: { preview: RevealEditor.#onPreview, exportWebm: RevealEditor.#onExportWebm, optimizeImages: RevealEditor.#onOptimize, aiPainted: RevealEditor.#onAiPainted, aiSketch: RevealEditor.#onAiSketch },
+    actions: { preview: RevealEditor.#onPreview, applyLive: RevealEditor.#onApplyLive, exportWebm: RevealEditor.#onExportWebm, optimizeImages: RevealEditor.#onOptimize, aiPainted: RevealEditor.#onAiPainted, aiSketch: RevealEditor.#onAiSketch },
   };
 
   static PARTS = { body: { template: `modules/${MODULE_ID}/templates/editor.hbs`, scrollable: [".sr-editor-scroll"] } };
@@ -102,6 +160,8 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     } else {
       const p = preset ?? { name: "", kind: "splash", sketch: "", painted: "", config: defaultConfig() };
       this.presetId = p.id ?? null;
+      this.ticker = sanitizeTicker(p.ticker ?? DEFAULT_TICKER);
+      this.newspaper = sanitizeNewspaper(p.newspaper ?? DEFAULT_NEWSPAPER);
       this.hints = p.hints ?? []; this.hintsStrict = !!p.hintsStrict;
       this.cfg = sanitizeConfig(p.config);
       this.meta = { name: p.name, kind: p.kind, sketch: p.sketch, painted: p.painted };
@@ -112,15 +172,25 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     return this.scene ? T("Editor.SceneTitle", { scene: this.scene.name }) : this.presetId ? T("Editor.EditTitle") : T("Editor.NewTitle");
   }
 
+  get isTicker() { return !this.scene && this.meta.kind === "ticker"; }
+  get isNewspaper() { return !this.scene && this.meta.kind === "newspaper"; }
+
   async _prepareContext() {
+    const ticker = this.isTicker, paper = this.isNewspaper;
+    const noImages = ticker || paper;
     return {
       sceneMode: !!this.scene,
+      isTicker: ticker,
+      noImages,
       meta: this.meta,
-      kinds: [{ value: "splash", label: T("Kind.splash") }, { value: "transition", label: T("Kind.transition") }],
-      configHtml: configFormHtml(this.cfg, this.scene ? "" : this._aiHtml()),
+      kinds: ["splash", "transition", "newspaper", "ticker"].map((value) => ({ value, label: T(`Kind.${value}`) })),
+      // pasek wiadomości i gazeta nie mają obrazów ani efektu — własne formularze
+      configHtml: ticker ? tickerFormHtml(this.ticker, { onAir: !!this.presetId && onAirPresetId() === this.presetId })
+        : paper ? newspaperFormHtml(this.newspaper)
+        : configFormHtml(this.cfg, this.scene ? "" : this._aiHtml()),
       saveLabel: T("Editor.Save"),
-      canOptimize: !this.scene && !!optimizerApi(), // przycisk tylko gdy działa moduł Media Optimizer (Local)
-      canAi: !this.scene && !!aiApi(), // generowanie obrazów tylko gdy działa moduł AI Image Gen (i jesteś GM-em)
+      canOptimize: !noImages && !this.scene && !!optimizerApi(), // przycisk tylko gdy działa moduł Media Optimizer (Local)
+      canAi: !noImages && !this.scene && !!aiApi(), // generowanie obrazów tylko gdy działa moduł AI Image Gen (i jesteś GM-em)
       aiBusy: aiBusy(this._aiKey), // trwająca generacja przeżywa re-render edytora: oba przyciski zostają wyłączone
     };
   }
@@ -162,9 +232,14 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     const data = readForm(form);
     // podpowiedzi AI dotyczą konkretnego obrazu malowanego — po jego zmianie są nieaktualne
     if (data.meta?.painted !== undefined && !this.scene && data.meta.painted !== this.meta.painted) this.hints = [];
+    // sekcję paska czytamy wtedy, gdy JEST w DOM (rodzaj w polu mógł się właśnie zmienić)
+    const tickerShown = !!form.querySelector('[data-sr="items"]');
+    const paperShown = !!form.querySelector('[data-sr="newspaper"]');
     if (data.meta) this.meta = { ...this.meta, ...data.meta };
-    const { meta, hintsStrict, ...rest } = data;
+    const { meta, hintsStrict, ticker, newspaper, ...rest } = data;
     void meta;
+    if (tickerShown) { this.ticker = readTickerForm(form, ticker); return; }
+    if (paperShown) { this.newspaper = sanitizeNewspaper({ ...this.newspaper, ...(newspaper ?? {}), playerSkip: !!newspaper?.playerSkip }); return; }
     if (hintsStrict !== undefined) this.hintsStrict = !!hintsStrict;
     this.cfg = sanitizeConfig(deepMerge(this.cfg, rest));
   }
@@ -173,6 +248,9 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     super._onRender?.(context, options);
     // zmiana efektu przebudowuje pola parametrów (zachowując resztę formularza)
     this.element.querySelector('select[name="effectId"]')?.addEventListener("change", () => { this._collect(); this.render(); });
+    // zmiana rodzaju (splash/przejście ↔ pasek wiadomości) przebudowuje formularz
+    this.element.querySelector('select[name="meta.kind"]')?.addEventListener("change", () => { this._collect(); this.render(); });
+    bindTickerItems(this.element);
     this.element.querySelector('[data-sr="ai-detect"]')?.addEventListener("click", () => this._aiDetect());
     this.element.querySelector('[data-sr="ai-clear"]')?.addEventListener("click", () => { this._collect(); this.hints = []; this.render(); });
     applyShowIf(this.element);
@@ -181,6 +259,8 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
 
   static async #onPreview() {
     this._collect();
+    if (this.isTicker) return previewTicker(this.ticker);
+    if (this.isNewspaper) return previewNewspaper(this.newspaper);
     if (!this.meta.sketch || !this.meta.painted) return ui.notifications.warn(T("Editor.NeedImages"));
     playSplash({ sketchUrl: this.meta.sketch, paintedUrl: this.meta.painted, config: this.cfg, hints: this.hints ?? null, hintsStrict: !!this.hintsStrict });
   }
@@ -273,8 +353,32 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       return;
     }
     if (!this.meta.name?.trim()) this.meta.name = T("Editor.Unnamed");
+    if (this.isTicker) { await this._saveTicker(); return; }
+    if (this.isNewspaper) {
+      const saved = await savePreset({ id: this.presetId, name: this.meta.name, kind: "newspaper", newspaper: this.newspaper });
+      this.presetId = saved.id;
+      RevealManager.instance?.render();
+      return;
+    }
     await savePreset({ id: this.presetId, ...this.meta, config: this.cfg, hints: this.hints, hintsStrict: this.hintsStrict });
     RevealManager.instance?.render();
+  }
+
+  /** Zapis paska; gdy jest na antenie, wszyscy widzą zmiany od następnej wiadomości (onChange ustawienia presetów). */
+  async _saveTicker() {
+    const saved = await savePreset({ id: this.presetId, name: this.meta.name, kind: "ticker", ticker: this.ticker });
+    this.presetId = saved.id;
+    RevealManager.instance?.render();
+    return saved;
+  }
+
+  /** „Zastosuj”: zapis bez zamykania okna — do poprawiania listy, gdy pasek leci. */
+  static async #onApplyLive() {
+    this._collect();
+    if (!this.meta.name?.trim()) this.meta.name = T("Editor.Unnamed");
+    await this._saveTicker();
+    ui.notifications.info(T(onAirPresetId() === this.presetId ? "Ticker.AppliedLive" : "Ticker.Applied"));
+    this.render();
   }
 }
 
@@ -299,6 +403,9 @@ export class RevealManager extends HandlebarsApplicationMixin(ApplicationV2) {
       exportPreset: RevealManager.#onExport,
       exportWebm: RevealManager.#onExportWebm,
       importPreset: RevealManager.#onImport,
+      tickerPreview: RevealManager.#onTickerPreview,
+      tickerAir: RevealManager.#onTickerAir,
+      tickerStop: RevealManager.#onTickerStop,
     },
   };
 
@@ -310,12 +417,27 @@ export class RevealManager extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   async _prepareContext() {
-    const presets = listPresets().map((p) => ({ ...p, kindLabel: T(`Kind.${p.kind}`), effectLabel: p.config?.effectId ?? "", isGM: game.user.isGM }));
+    const onAir = onAirPresetId();
+    const presets = listPresets().map((p) => {
+      const o = { ...p, kindLabel: T(`Kind.${p.kind}`), effectLabel: p.config?.effectId ?? "", isGM: game.user.isGM };
+      if (isNewspaper(p)) {
+        const n = sanitizeNewspaper(p.newspaper);
+        Object.assign(o, { isNewspaper: true, paper: n.paper, effectLabel: T("Newspaper.Meta", { kind: T("Kind.newspaper"), turns: n.turns, sec: n.spinSec }) });
+      }
+      return o;
+    });
+    const tickers = presets.filter((p) => isTicker(p)).map((p) => {
+      const t = sanitizeTicker(p.ticker);
+      return { ...p, accent: t.accent, onAccent: inkOn(t.accent), onAir: p.id === onAir, look: t.look,
+        tickerMeta: [T(`LookShort.${t.look}`), T("Manager.TickerItems", { n: t.items.length }), T(`Mode.${t.mode}`), T(`StyleShort.${t.style}`)].join(" · ") };
+    });
     return {
       isGM: game.user.isGM,
       presets,
       splashes: presets.filter((p) => p.kind === "splash"),
-      transitions: presets.filter((p) => p.kind === "transition"),
+      transitions: presets.filter((p) => p.kind === "transition" || p.kind === "newspaper"),
+      tickers,
+      onAirName: tickers.find((p) => p.onAir)?.name ?? "",
     };
   }
 
@@ -323,7 +445,8 @@ export class RevealManager extends HandlebarsApplicationMixin(ApplicationV2) {
     super._onRender?.(context, options);
     // przeciągnięcie obrazka presetu na pasek makr tworzy makro „pokaż wszystkim”
     if (!game.user.isGM) return;
-    for (const img of this.element.querySelectorAll(".sr-thumb")) {
+    // gazeta nie ma makra „pokaż wszystkim” (gra przy zmianie sceny) — jej miniatura nie jest przeciągalna
+    for (const img of this.element.querySelectorAll(".sr-thumb:not(.sr-thumb-news)")) {
       img.draggable = true;
       img.addEventListener("dragstart", (ev) => {
         const id = img.closest("[data-preset]")?.dataset.preset;
@@ -356,15 +479,18 @@ export class RevealManager extends HandlebarsApplicationMixin(ApplicationV2) {
     if (!p || p.builtin) return;
     const ok = await foundry.applications.api.DialogV2.confirm({ window: { title: T("Manager.Delete") }, content: `<p>${foundry.utils.escapeHTML(p.name)}</p>` });
     if (!ok) return;
+    if (onAirPresetId() === p.id) await stopTicker(); // nie zostawiaj stanu „na antenie” po usuniętym presecie
     await deletePreset(p.id);
     this.render();
   }
   static async #onPlayLocal(event, target) {
     const p = RevealManager.#preset(target);
+    if (p && isNewspaper(p)) return previewNewspaper(p.newspaper);
     if (p) playSplash(payloadOf(p));
   }
   static async #onPlayAll(event, target) {
     const p = RevealManager.#preset(target);
+    if (p && isTicker(p)) return startTicker(p.id);
     if (p) showSplashToAll(p.id);
   }
   static async #onPreload(event, target) {
@@ -374,6 +500,16 @@ export class RevealManager extends HandlebarsApplicationMixin(ApplicationV2) {
     ui.notifications.info(TE("Manager.Preloaded", { name: p.name }));
   }
   static async #onCloseAll() { broadcastClose(); }
+
+  static async #onTickerPreview(event, target) {
+    const p = RevealManager.#preset(target);
+    if (p) previewTicker(p.ticker);
+  }
+  static async #onTickerAir(event, target) {
+    const p = RevealManager.#preset(target);
+    if (p) await toggleTicker(p.id);
+  }
+  static async #onTickerStop() { await stopTicker(); }
 
   static async #onExportWebm(event, target) {
     const p = RevealManager.#preset(target);
@@ -386,7 +522,7 @@ export class RevealManager extends HandlebarsApplicationMixin(ApplicationV2) {
     if (!p) return;
     const { id, builtin, ...data } = p;
     void id; void builtin;
-    foundry.utils.saveDataToFile(JSON.stringify({ module: MODULE_ID, version: 1, ...data }, null, 2), "application/json", `${p.name}.reveal.json`);
+    foundry.utils.saveDataToFile(JSON.stringify({ module: MODULE_ID, version: 1, ...data }, null, 2), "application/json", `${p.name}.${isTicker(p) ? "news" : "reveal"}.json`);
   }
 
   /** Import presetu z JSON (nigdy nie rzuca na zepsutym pliku — komunikat). */
@@ -402,7 +538,7 @@ export class RevealManager extends HandlebarsApplicationMixin(ApplicationV2) {
         // ścieżki obrazów z obcego pliku: tylko względne (bez schematu i //) — inaczej każdy klient pobierałby cudzy URL (wyciek IP)
         const local = (u) => (typeof u === "string" && !/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(u.trim()) ? u.trim() : "");
         const sketch = local(raw.sketch), painted = local(raw.painted);
-        const p = await savePreset({ name: raw.name, kind: raw.kind, sketch, painted, config: raw.config, hints: raw.hints, hintsStrict: raw.hintsStrict });
+        const p = await savePreset({ name: raw.name, kind: raw.kind, sketch, painted, config: raw.config, hints: raw.hints, hintsStrict: raw.hintsStrict, ticker: raw.ticker, newspaper: raw.newspaper });
         ui.notifications.info(TE("Manager.Imported", { name: p.name }));
         if ((raw.sketch && !sketch) || (raw.painted && !painted)) ui.notifications.warn(T("Manager.ImportUrls"));
         this.render();
@@ -411,5 +547,8 @@ export class RevealManager extends HandlebarsApplicationMixin(ApplicationV2) {
     input.click();
   }
 }
+
+// stan „na antenie” zmienił się (u każdego klienta) → odśwież menedżer (podświetlenie, przycisk nadawania)
+Hooks.on("sketchReveal.tickerState", () => RevealManager.instance?.render());
 
 export { BUILTIN_PRESETS };

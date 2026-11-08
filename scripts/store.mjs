@@ -1,6 +1,8 @@
 /* Magazyn: presety (ustawienie świata + wbudowane przykłady) i konfiguracja per scena (flagi sceny). */
 import { LIGHT_HINT_KINDS } from "../vendor/reveal-core.js";
 import { MODULE_ID, defaultConfig, deepMerge, sanitizeConfig } from "./config.mjs";
+import { sanitizeTicker } from "./fx/ticker.mjs";
+import { sanitizeNewspaper } from "./fx/newspaper.mjs";
 
 const SAMPLES = `modules/${MODULE_ID}/samples`;
 
@@ -15,10 +17,28 @@ export const BUILTIN_PRESETS = [
   { id: "builtin-baza", name: "Podziemna baza (ekrany)", kind: "transition", builtin: true,
     sketch: `${SAMPLES}/baza/sketch.png`, painted: `${SAMPLES}/baza/painted.png`,
     config: { effectId: "watercolor", intro: { enabled: true, seconds: 6, colorAt: 80 } } },
+  { id: "builtin-news", name: "Serwis informacyjny (przykład)", kind: "ticker", builtin: true, sketch: "", painted: "",
+    ticker: sanitizeTicker({ channel: "Kanał 7", headline: "Smok nad Kamiennym Mostem", accent: "#c8102e", live: true, mode: "loop", style: "flip", items: [
+      { id: "n1", label: "Pilne", text: "Smok widziany nad Kamiennym Mostem — straż miejska zamyka przeprawę do odwołania" },
+      { id: "n2", label: "Gospodarka", text: "Ceny zboża w Dolnym Grodzie wzrosły o 30 procent" },
+      { id: "n3", label: "", text: "Karawana z Południa spóźniona o trzy dni" },
+      { id: "n4", label: "Pogoda", text: "Nad Marchiami Północnymi zbiera się burza — żeglarze zostają w portach" },
+    ] }) },
+  { id: "builtin-gazeta", name: "Wirująca gazeta (przykład)", kind: "newspaper", builtin: true, sketch: "", painted: "",
+    newspaper: sanitizeNewspaper({ masthead: "Kurier Wieczorny", headline: "", spinSec: 2.4, turns: 3, direction: "cw" }) },
+  { id: "builtin-tabloid", name: "Wirujący tabloid (przykład)", kind: "newspaper", builtin: true, sketch: "", painted: "",
+    newspaper: sanitizeNewspaper({ style: "modern", masthead: "EXPRESS", headline: "", accent: "#d0121b", spinSec: 2.2, turns: 3, direction: "ccw" }) },
 ];
 
+export const PRESET_KINDS = ["splash", "transition", "ticker", "newspaper"];
+export const isTicker = (p) => p?.kind === "ticker";
+/** Gazeta: przejście sceny bez obrazów (zrzut widoku gracza), własna konfiguracja w `newspaper`. */
+export const isNewspaper = (p) => p?.kind === "newspaper";
+
 export function registerStore() {
-  game.settings.register(MODULE_ID, "presets", { scope: "world", config: false, type: Object, default: {} });
+  // onChange (u wszystkich klientów): pasek na antenie i otwarte okna odświeżają się po zapisie presetu
+  game.settings.register(MODULE_ID, "presets", { scope: "world", config: false, type: Object, default: {},
+    onChange: () => Hooks.callAll("sketchReveal.presets") });
 }
 
 const userPresets = () => foundry.utils.deepClone(game.settings.get(MODULE_ID, "presets") ?? {});
@@ -68,10 +88,16 @@ export async function savePreset(p) {
   if (!game.user.isGM) throw new Error("GM only");
   const all = userPresets();
   const id = typeof p.id === "string" && p.id && !p.id.startsWith("builtin-") && Object.hasOwn(all, p.id) ? p.id : foundry.utils.randomID();
-  all[id] = { id, name: str(p.name, 120).trim() || "Reveal", kind: p.kind === "transition" ? "transition" : "splash",
-    sketch: str(p.sketch), painted: str(p.painted), config: sanitizeConfig(p.config),
-    // podpowiedzi świateł z AI (wykrywa GM w edytorze, gracze tylko je czytają)
-    hints: validHints(p.hints), hintsStrict: !!p.hintsStrict };
+  const kind = PRESET_KINDS.includes(p.kind) ? p.kind : "splash";
+  const name = str(p.name, 120).trim() || (kind === "ticker" ? "News" : kind === "newspaper" ? "Newspaper" : "Reveal");
+  // pasek wiadomości i gazeta nie mają obrazów ani efektu — tylko własną konfigurację
+  all[id] = kind === "ticker"
+    ? { id, name, kind, sketch: "", painted: "", ticker: sanitizeTicker(p.ticker) }
+    : kind === "newspaper"
+    ? { id, name, kind, sketch: "", painted: "", newspaper: sanitizeNewspaper(p.newspaper) }
+    : { id, name, kind, sketch: str(p.sketch), painted: str(p.painted), config: sanitizeConfig(p.config),
+      // podpowiedzi świateł z AI (wykrywa GM w edytorze, gracze tylko je czytają)
+      hints: validHints(p.hints), hintsStrict: !!p.hintsStrict };
   await game.settings.set(MODULE_ID, "presets", all);
   return all[id];
 }
@@ -99,7 +125,7 @@ export function resolveScene(scene) {
   const f = sceneFlags(scene);
   if (!f.enabled || !f.presetId) return null;
   const preset = getPreset(f.presetId);
-  if (!preset) return null;
+  if (!preset || isTicker(preset) || isNewspaper(preset)) return null;
   const sketchUrl = f.sketch || preset.sketch;
   const paintedUrl = f.painted || preset.painted || sceneBackground(scene);
   if (!sketchUrl || !paintedUrl) return null;
@@ -107,6 +133,15 @@ export function resolveScene(scene) {
   // podpowiedzi AI wykryto na obrazie presetu — przy innym obrazie malowanym (scena / tło) byłyby w złych miejscach
   const hintsFit = paintedUrl === preset.painted && preset.hints?.length;
   return { preset, hints: hintsFit ? preset.hints : null, hintsStrict: hintsFit ? !!preset.hintsStrict : false, sketchUrl, paintedUrl, config, trigger: f.trigger === "view" ? "view" : "activate", name: preset.name };
+}
+
+/** Scena z presetem „gazeta”: { preset, newspaper, trigger, name } albo null. */
+export function resolveNewspaper(scene) {
+  const f = sceneFlags(scene);
+  if (!f.enabled || !f.presetId) return null;
+  const preset = getPreset(f.presetId);
+  if (!isNewspaper(preset)) return null;
+  return { preset, newspaper: sanitizeNewspaper(preset.newspaper), trigger: f.trigger === "view" ? "view" : "activate", name: preset.name };
 }
 
 export { defaultConfig };
