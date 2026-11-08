@@ -5,7 +5,11 @@
 /* lokalna kopia Amiri (ten sam plik, który Foundry serwuje z /fonts/amiri) — w Foundry krój deklaruje sam rdzeń */
 @font-face { font-family: "Amiri"; src: url("fonts/amiri-regular.woff2") format("woff2"); font-weight: 400; }
 @font-face { font-family: "Amiri"; src: url("fonts/amiri-bold.woff2") format("woff2"); font-weight: 700; }
-@font-face { font-family: "Signika"; src: url("fonts/signika-medium.woff2") format("woff2"); font-weight: 400 500; }
+@font-face { font-family: "Signika"; src: url("fonts/signika-regular.woff2") format("woff2"); font-weight: 400; }
+@font-face { font-family: "Signika"; src: url("fonts/signika-medium.woff2") format("woff2"); font-weight: 500; }
+/* Modesto Condensed: krój rdzenia Foundry (/fonts/modesto-condensed); lokalna kopia nieśledzona w git (licencja Fontspring) */
+@font-face { font-family: "Modesto Condensed"; src: url("fonts/modesto-condensed.woff2") format("woff2"); font-weight: 400; }
+@font-face { font-family: "Modesto Condensed"; src: url("fonts/modesto-condensed-bold.woff2") format("woff2"); font-weight: 700; }
 @font-face { font-family: "Signika"; src: url("fonts/signika-semibold.woff2") format("woff2"); font-weight: 600; }
 @font-face { font-family: "Signika"; src: url("fonts/signika-bold.woff2") format("woff2"); font-weight: 700; }
 html,body{margin:0;height:100%;overflow:hidden;background:#111;color:#ddd;font:13px/1.35 system-ui,sans-serif}
@@ -32,11 +36,16 @@ body.ui .fake{display:block}
 .row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 #log{font:11px ui-monospace,monospace;opacity:.8;min-height:1.3em}
 body.clean #panel{display:none}
+#panel textarea{background:#000;color:#eee;border:1px solid #444;width:100%;height:4.2em;font:12px system-ui,sans-serif}
+#sheet{position:fixed;inset:0;z-index:90;background:#222;overflow:auto;display:none;text-align:center}
+#sheet.on{display:block}
+#sheet canvas{display:inline-block;margin:12px;box-shadow:0 4px 18px rgba(0,0,0,.6)}
 </style></head><body class="ui">
 <div id="newmap"><div id="newcam"><img id="newimg" alt=""></div></div>
 <canvas id="oldmap"></canvas>
 <div class="fake" id="f-left"></div><div class="fake" id="f-side"></div><div class="fake" id="f-hot"></div>
 <div id="host"></div>
+<div id="sheet" title="klik = zamknij"></div>
 <div id="panel">
   <div class="row">
     <button id="run">▶ Zmiana sceny (całość)</button><button id="press">1. uformuj</button><button id="spin">2. odlot</button>
@@ -52,8 +61,20 @@ body.clean #panel{display:none}
   </div>
   <div class="row more">
     <label>wygląd <select id="style"><option value="classic">klasyczna</option><option value="modern">współczesna</option></select></label>
-    <label>winieta <input id="masthead" type="text" value="Kurier Wieczorny"></label>
-    <label>nagłówek <input id="headline" type="text" value="" placeholder="puste = udawany"></label>
+    <label>teksty <select id="texts"><option value="default">domyślne (puste)</option><option value="custom">własne krótkie</option><option value="long">bardzo długie</option><option value="short">jednowyrazowe</option><option value="polish">po polsku</option></select></label>
+    <label>winieta <input id="masthead" type="text" value="" placeholder="puste = domyślna"></label>
+    <label>baner <input id="kicker" type="text" value="Extra" style="width:80px"></label>
+    <label>nagłówek <input id="headline" type="text" value="" placeholder="puste = domyślny"></label>
+  </div>
+  <div class="row more">
+    <label>podtytuł <input id="deck" type="text" value=""></label>
+    <label>podpis <input id="caption" type="text" value=""></label>
+    <label>miejsce <input id="place" type="text" value="" style="width:100px"></label>
+    <label>data <input id="date" type="text" value="" style="width:150px"></label>
+    <button id="pageview">strona w 1:1</button>
+  </div>
+  <div class="row more">
+    <textarea id="stories" placeholder="pozostałe nagłówki, po jednym w wierszu (puste = domyślne)"></textarea>
     <label>papier <input id="paper" type="color" value="#ebe3cf"></label>
     <label>akcent <input id="accent" type="color" value="#d0121b"></label>
   </div>
@@ -66,12 +87,33 @@ body.clean #panel{display:none}
   <div id="log" class="more"></div>
 </div>
 <script type="module">
-import { createNewspaper, sanitizeNewspaper, HOLD_MS, PRESS_MS, PUSH_MS, photoCrop, sameRect, coverView, cameraEase, revealCameraMs, REVEAL_ZOOM } from "../scripts/fx/newspaper.mjs";
+import { createNewspaper, paintPage, paintModern, sanitizeNewspaper, HOLD_MS, PRESS_MS, PUSH_MS, photoCrop, sameRect, coverView, cameraEase, revealCameraMs, REVEAL_ZOOM } from "../scripts/fx/newspaper.mjs";
 const $ = (id) => document.getElementById(id);
 const log = (m) => { $("log").textContent = m; console.log("[newspaper]", m); };
 const img = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
-const data = () => sanitizeNewspaper({ style: $("style").value, accent: $("accent").value, masthead: $("masthead").value, headline: $("headline").value, paper: $("paper").value,
+const data = () => sanitizeNewspaper({ style: $("style").value, accent: $("accent").value, paper: $("paper").value,
+  masthead: $("masthead").value, kicker: $("kicker").value, headline: $("headline").value, deck: $("deck").value, caption: $("caption").value,
+  place: $("place").value, date: $("date").value, stories: $("stories").value,
   spinSec: +$("spinSec").value, turns: +$("turns").value, direction: $("direction").value });
+/** Zestawy tekstów do testu dopasowania: puste (domyślne), krótkie własne, skrajnie długie, jednowyrazowe, polskie znaki. */
+const TEXTS = {
+  default: { masthead: "", kicker: "Extra", headline: "", deck: "", caption: "", place: "", date: "", stories: "" },
+  custom: { masthead: "The Evening Sentinel", kicker: "Late City", headline: "Bank Vault Found Empty", deck: "Night Watchman Saw Nothing; Police Search the Docks", caption: "The vault as it was found at dawn.", place: "New Carthage", date: "Tuesday, March 4, 1941", stories: "Mayor Denies Rumors\nSchools Closed for Repairs\nDock Strike Ends\nFair Opens Saturday" },
+  long: { masthead: "The Greater Metropolitan Evening Chronicle & Herald", kicker: "Special Late Extra Edition", headline: "Unprecedented Disturbance Paralyzes the Entire Waterfront District as Thousands Gather and Authorities Remain", deck: "Eyewitnesses From Every Corner of the City Offer Conflicting Accounts of What Happened Shortly After Midnight While Officials Refuse to Answer Any Questions From the Press",
+    caption: "A view of the waterfront taken from the roof of the customs house at a quarter past one in the morning, shortly before police cleared the area of onlookers and reporters.", place: "South Harbor Junction City", date: "Wednesday, September 30, 1936",
+    stories: "Councilmen Argue Late Into the Night Over Emergency Spending Bill and New Curfew\nHarbor Traffic Halted Indefinitely While Coast Guard Searches the Outer Breakwater\nExtraordinarilylongwordthatcannotbreakanywhereatallreally\nMuseum Reports Missing Artifact\nStorm Warning\nRailroad Promises Faster Service on All Lines" },
+  short: { masthead: "Bugle", kicker: "", headline: "War!", deck: "Yes.", caption: "Here.", place: "Ur", date: "", stories: "A\nB\nC\nD\nE\nF" },
+  polish: { masthead: "Kurier Łódzki Wieczorny", kicker: "Wydanie nadzwyczajne", headline: "Żółta mgła nad śródmieściem – zagadka się pogłębia", deck: "Świadkowie opisują dziwne zdarzenia nad rzeką; władze obiecują pełne śledztwo", caption: "Miejsce zdarzenia sfotografowane przez naszego reportera kilka minut temu.", place: "Łódź", date: "", stories: "Rada miasta zwołana na posiedzenie\nRuch w porcie wstrzymany\nPatrole nocne podwojone\nZniknął eksponat z muzeum\nOstrzeżenie przed burzą\nKolej obiecuje szybsze pociągi" },
+};
+const setTexts = (k) => { for (const [f, v] of Object.entries(TEXTS[k])) $(f).value = v.replaceAll("\\n", "\n"); };
+/** Sama strona w rozdzielczości 1:1 (do czytania tekstu): px płótna = px ekranu, przewijana. */
+function pageView(W = 1100) {
+  const { photo } = capture(), d = data();
+  const page = (d.style === "modern" ? paintModern : paintPage)({ W, photo, aspect: photo.width / photo.height, data: d, seed: +$("seed").value,
+    fonts: { serif: "Amiri", sans: "Signika", cond: "Modesto Condensed" } });
+  const sh = $("sheet"); sh.replaceChildren(page.canvas); sh.classList.add("on");
+  return { W, H: page.H, photoRect: page.photoRect };
+}
 /** Te same odstępy, które w Foundry liczy uiBounds() (kolumna narzędzi, pasek boczny, pasek makr). */
 function safe() {
   if (!$("ui").checked) return { left: 16, right: 16, top: 16, bottom: 16 };
@@ -158,7 +200,7 @@ function begin() {
   const t0 = performance.now();
   const { photo, cover, crop } = capture();
   const cap = performance.now() - t0;
-  np = createNewspaper({ host: $("host"), photo, cover, crop, coverBg: PAD_BG, data: data(), reduced: $("reduced").checked, lite: $("lite").checked, safe: safe(), seed: +$("seed").value, family: "Amiri", sansFamily: "Signika" });
+  np = createNewspaper({ host: $("host"), photo, cover, crop, coverBg: PAD_BG, data: data(), reduced: $("reduced").checked, lite: $("lite").checked, safe: safe(), seed: +$("seed").value, family: "Amiri", sansFamily: "Signika", condFamily: "Modesto Condensed" });
   window.np = np;
   $("oldmap").classList.add("gone"); // „teardown”: stara scena znika, pod spodem nowa
   np.ready.then(() => log(`zrzut ${cap.toFixed(1)} ms · strona ${np.stats.pageW}px w ${np.stats.buildMs} ms · najazd ${np.stats.pushIn ? JSON.stringify(Object.fromEntries(Object.entries(np.stats.crop).map(([k, v]) => [k, Math.round(v)]))) : "nie"}`));
@@ -179,6 +221,9 @@ $("press").onclick = () => begin().press();
 $("spin").onclick = () => { if (!np) return; revealCamera(np.stats.reduced); np.spin().then(reset); };
 $("close").onclick = () => { np?.close(); reset(); };
 $("toggle").onclick = () => $("panel").classList.toggle("min");
+$("texts").onchange = () => setTexts($("texts").value);
+$("pageview").onclick = () => pageView();
+$("sheet").onclick = () => $("sheet").classList.remove("on");
 $("ui").onchange = () => document.body.classList.toggle("ui", $("ui").checked);
 $("old").onchange = drawOld; $("new").onchange = drawOld; $("pad").onchange = drawOld;
 addEventListener("resize", drawOld);
@@ -204,12 +249,14 @@ async function still(phase, t) {
   await new Promise((r) => setTimeout(r, 80));
   return np;
 }
-window.harness = { run, begin, reset, freeze, still, data, safe, capture, revealCamera, set: (o) => { for (const [k, v] of Object.entries(o)) { const el = $(k); if (el.type === "checkbox") el.checked = v; else el.value = v; el.onchange?.(); } } };
+window.harness = { run, begin, reset, freeze, still, data, safe, capture, revealCamera, pageView, texts: (k) => { $("texts").value = k; setTexts(k); }, set: (o) => { for (const [k, v] of Object.entries(o)) { const el = $(k); if (el.type === "checkbox") el.checked = v; else el.value = v; el.onchange?.(); } } };
 const q = new URLSearchParams(location.search);
 if (q.has("pad")) $("pad").checked = true;
 await drawOld();
 if (q.has("clean")) document.body.classList.add("clean");
-if (q.get("style") === "modern") { $("style").value = "modern"; $("masthead").value = "EXPRESS"; }
+if (q.get("style") === "modern") { $("style").value = "modern"; $("kicker").value = "Exclusive"; }
+if (q.has("texts")) { $("texts").value = q.get("texts"); setTexts(q.get("texts")); }
+await Promise.all(["Amiri", "Signika", "Modesto Condensed"].flatMap((f) => [`400 20px "${f}"`, `700 20px "${f}"`].map((x) => document.fonts.load(x))));
 if (q.has("auto")) run();
 window.ready = true;
 </script></body></html>

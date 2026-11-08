@@ -11,7 +11,7 @@ import { DEFAULT_TICKER, inkOn, sanitizeTicker } from "./fx/ticker.mjs";
 import { bindTickerItems, readTickerForm, tickerFormHtml } from "./ticker-form.mjs";
 import { onAirPresetId, previewTicker, startTicker, stopTicker, toggleTicker } from "./ticker-play.mjs";
 import { DEFAULT_NEWSPAPER, sanitizeNewspaper } from "./fx/newspaper.mjs";
-import { newspaperFormHtml, previewNewspaper } from "./newspaper-play.mjs";
+import { bindNewspaperForm, newspaperFormHtml, previewNewspaper } from "./newspaper-play.mjs";
 import { EFFECTS } from "../vendor/reveal-core.js";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
@@ -251,6 +251,7 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     // zmiana rodzaju (splash/przejście ↔ pasek wiadomości) przebudowuje formularz
     this.element.querySelector('select[name="meta.kind"]')?.addEventListener("change", () => { this._collect(); this.render(); });
     bindTickerItems(this.element);
+    bindNewspaperForm(this.element);
     this.element.querySelector('[data-sr="ai-detect"]')?.addEventListener("click", () => this._aiDetect());
     this.element.querySelector('[data-sr="ai-clear"]')?.addEventListener("click", () => { this._collect(); this.hints = []; this.render(); });
     applyShowIf(this.element);

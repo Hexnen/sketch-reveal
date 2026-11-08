@@ -6,7 +6,8 @@ import { exportRevealWebm } from "./export-ui.mjs";
 import { playSplash } from "./play.mjs";
 import { aiApi, aiBusy, aiGeneratePainted, aiGenerateSketch, aiGuard } from "./ai-image.mjs";
 import { getPreset, isNewspaper, listPresets, resolveNewspaper, resolveScene, sceneBackground, sceneFlags } from "./store.mjs";
-import { previewNewspaper } from "./newspaper-play.mjs";
+import { bindNewspaperDraft, newspaperDraftHtml, previewNewspaper, sceneDraftPlaceholders } from "./newspaper-play.mjs";
+import { applyNewspaperOverride } from "./fx/newspaper.mjs";
 
 const TAB = "sketchreveal";
 const T = (k, d) => (d ? game.i18n.format(`SKETCHREVEAL.${k}`, d) : game.i18n.localize(`SKETCHREVEAL.${k}`));
@@ -24,6 +25,14 @@ function tabHtml(scene, active) {
     .concat(presets.map((p) => `<option value="${esc(p.id)}"${p.id === f.presetId ? " selected" : ""}>${esc(p.name)} (${esc(T(`Kind.${p.kind}`))})</option>`)).join("");
   const overrideCount = Object.keys(foundry.utils.flattenObject(f.override ?? {})).length;
   const bg = sceneBackground(scene);
+  // teksty pierwszej strony per scena (tylko dla presetu „gazeta”; puste pole = tekst presetu, pokazany na szaro)
+  const npPreset = getPreset(f.presetId);
+  const npPh = sceneDraftPlaceholders(isNewspaper(npPreset) ? npPreset.newspaper : null);
+  const npDraft = newspaperDraftHtml({
+    prefix: `${F}.newspaper`, values: f.newspaper && typeof f.newspaper === "object" ? storyValues(f.newspaper) : {}, ph: npPh.ph, style: npPh.style,
+    kickerPh: npPh.kickerPh, accent: npPh.accent, legend: T("NewsDraft.SceneLegend"), hint: T("NewsDraft.SceneHint"),
+    extra: isNewspaper(npPreset) ? "" : " hidden",
+  });
   return `<div class="tab scrollable sketch-reveal-tab${active ? " active" : ""}" data-group="sheet" data-tab="${TAB}">
     <fieldset>
       <legend>${esc(T("Scene.Legend"))}</legend>
@@ -47,6 +56,7 @@ function tabHtml(scene, active) {
         <p class="hint">${esc(T("Scene.TriggerHint"))}</p>
       </div>
     </fieldset>
+    ${npDraft}
     <fieldset>
       <legend>${esc(T("Scene.Images"))}</legend>
       <div class="form-group">
@@ -81,6 +91,23 @@ function tabHtml(scene, active) {
       </div>
     </fieldset>
   </div>`;
+}
+
+/** Nadpisania z flag sceny w postaci do pól szkicu (lista nagłówków z obiektu {0: …} albo tablicy). */
+function storyValues(ov) {
+  const st = ov.stories;
+  const stories = Array.isArray(st) ? st : st && typeof st === "object" ? Array.from({ length: 6 }, (_, i) => st[i] ?? "") : [];
+  return { ...ov, stories: stories.map((x) => (typeof x === "string" ? x : "")) };
+}
+
+/** Bieżące (niezapisane) nadpisania tekstu gazety z pól zakładki. */
+function liveNewspaperOverride(tab) {
+  const ov = { stories: [] };
+  for (const el of tab.querySelectorAll('[data-sr="newspaper-draft"] [data-np]')) {
+    const m = /^stories\.(\d+)$/.exec(el.dataset.np);
+    if (m) ov.stories[+m[1]] = el.value; else ov[el.dataset.np] = el.value;
+  }
+  return ov;
 }
 
 /** Hook `renderSceneConfig`: wstrzyknij zakładkę (idempotentnie — częściowe renderery nie dublują). */
@@ -130,9 +157,18 @@ export function onRenderSceneConfig(app, html) {
     if (path) await apply("sketch", path);
   }, setAiButtons));
 
+  // szkic pierwszej strony: widoczny tylko przy presecie „gazeta”, szare podpowiedzi = tekst wybranego presetu
+  const presetSel = tab.querySelector(`select[name="flags.${MODULE_ID}.presetId"]`);
+  const refreshDraft = bindNewspaperDraft(tab, () => sceneDraftPlaceholders(getPreset(presetSel?.value)?.newspaper));
+  presetSel?.addEventListener("change", () => {
+    const draft = tab.querySelector('[data-sr="newspaper-draft"]');
+    if (draft) draft.hidden = !isNewspaper(getPreset(presetSel.value));
+    refreshDraft?.();
+  });
+
   tab.querySelector('[data-sr="edit"]').addEventListener("click", () => {
     if (!sceneFlags(app.document).presetId) return ui.notifications.warn(T("Scene.PickPreset"));
-    // gazeta nie ma nadpisań per scena (zrzut widoku zamiast obrazów; ustawienia tylko w presecie)
+    // gazeta: teksty strony per scena są w szkicu nad tym polem; wygląd i obrót tylko w presecie
     if (isNewspaper(getPreset(sceneFlags(app.document).presetId))) return ui.notifications.info(T("Newspaper.NoOverrides"));
     new RevealEditor({ scene: app.document }).render({ force: true });
   });
@@ -146,8 +182,11 @@ export function onRenderSceneConfig(app, html) {
     exportRevealWebm({ sketchUrl: r.sketchUrl, paintedUrl: r.paintedUrl, config: r.config, hints: r.hints, hintsStrict: r.hintsStrict, name: app.document.name });
   });
   tab.querySelector('[data-sr="preview"]').addEventListener("click", () => {
+    // gazeta: preset i teksty z pól zakładki (niezapisane zmiany też), podgląd na bieżącym widoku bez zmiany sceny
+    const picked = getPreset(presetSel?.value);
+    if (isNewspaper(picked)) return previewNewspaper(applyNewspaperOverride(picked.newspaper, liveNewspaperOverride(tab)));
     const np = resolveNewspaper(app.document);
-    if (np) return previewNewspaper(np.newspaper); // podgląd na bieżącym widoku (bez zmiany sceny)
+    if (np) return previewNewspaper(np.newspaper);
     const r = resolveScene(app.document);
     if (!r) return ui.notifications.warn(T("Scene.NothingToPreview"));
     playSplash({ sketchUrl: r.sketchUrl, paintedUrl: r.paintedUrl, config: r.config, hints: r.hints, hintsStrict: r.hintsStrict });

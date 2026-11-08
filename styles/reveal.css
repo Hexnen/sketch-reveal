@@ -91,3 +91,70 @@
 .sketch-reveal .sr-thumb-news > span { left: 35%; top: 14%; width: 29%; height: 78%; transform: rotate(-4deg);
   background: linear-gradient(#1d1a16, #1d1a16) 0 0 / 100% 10% no-repeat, repeating-linear-gradient(to bottom, transparent 0 3px, rgba(29,26,22,.45) 3px 4px) 0 45% / 100% 55% no-repeat; }
 .sketch-reveal-overlay.sr-transition.sr-newspaper { background: transparent; }
+
+/* ================================================================ gazeta: szkic pierwszej strony (edytor presetu i zakładka sceny)
+   Bez ramek pól, jak scenariusz paska: z lewej rubryki (gdzie trafi wiersz), z prawej tekst pisany krojem zbliżonym do
+   druku (winieta, baner farbą akcentu, wąski nagłówek wersalikami, podtytuł). Szary tekst = to, co wydrukuje się przy pustym polu. */
+.sr-np-draft {
+  --sr-accent: #d0121b;
+  --sr-ink-soft: color-mix(in srgb, currentColor 45%, transparent);
+  --sr-row-hi: color-mix(in srgb, currentColor 7%, transparent);
+  --sr-slug: 9.5ch;
+}
+.sr-np-draft[hidden] { display: none; }
+.sr-np-draft .sr-np-sheet { display: flex; flex-direction: column; gap: 1px; padding: .2rem 0 .3rem; }
+.sr-np-draft .sr-np-row {
+  display: grid; grid-template-columns: var(--sr-slug) minmax(0, 1fr); column-gap: .7rem; align-items: baseline;
+  padding: .28rem .4rem .28rem 0; border-radius: 4px; transition: background-color .15s ease;
+}
+.sr-np-draft .sr-np-row:hover { background: color-mix(in srgb, currentColor 3.5%, transparent); }
+.sr-np-draft .sr-np-row:focus-within { background: var(--sr-row-hi); }
+.sr-np-draft .sr-np-row > label.sr-np-slug {
+  justify-self: end; text-align: right; margin: 0; padding: 0; flex: none; line-height: 1.3;
+  font-size: .72em; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--sr-accent) 70%, currentColor);
+}
+:is(.sketch-reveal, .sketch-reveal-tab) .sr-np-draft .sr-np-row > :is(input, textarea).sr-np-in {
+  margin: 0; padding: 0; min-height: 0; height: auto; width: 100%;
+  border: 0; border-radius: 0; outline: 0; box-shadow: none; background: transparent;
+  color: inherit; caret-color: var(--sr-accent);
+  font-family: Amiri, Georgia, "Times New Roman", serif; font-size: 1.02em; line-height: 1.35;
+}
+:is(.sketch-reveal, .sketch-reveal-tab) .sr-np-draft .sr-np-row > textarea.sr-np-in { display: block; resize: none; overflow: hidden; text-wrap: pretty; }
+:is(.sketch-reveal, .sketch-reveal-tab) .sr-np-draft .sr-np-row > :is(input, textarea).sr-np-in:focus { outline: 0; box-shadow: none; border: 0; background: transparent; }
+:is(.sketch-reveal, .sketch-reveal-tab) .sr-np-draft .sr-np-row > :is(input, textarea).sr-np-in::placeholder { color: var(--sr-ink-soft); opacity: 1; }
+:is(.sketch-reveal, .sketch-reveal-tab) .sr-np-draft .sr-np-row > :is(input, textarea).sr-np-in::selection { background: color-mix(in srgb, var(--sr-accent) 30%, transparent); }
+.sr-np-draft .sr-np-row:has(.sr-np-in:focus-visible) { box-shadow: inset 2px 0 0 var(--sr-accent); }
+
+/* winieta: duży szeryf (klasyczny) / pogrubiony grotesk w kolorze akcentu (współczesny) */
+:is(.sketch-reveal, .sketch-reveal-tab) .sr-np-draft .sr-np-masthead > :is(input, textarea).sr-np-in { font-size: 1.55em; font-weight: 700; line-height: 1.15; }
+:is(.sketch-reveal, .sketch-reveal-tab) .sr-np-draft[data-style="modern"] .sr-np-masthead > :is(input, textarea).sr-np-in {
+  font-family: Signika, "Segoe UI", Arial, sans-serif; color: var(--sr-accent); letter-spacing: -.01em;
+}
+/* miejsce i data: drobny druk linii numeru */
+:is(.sketch-reveal, .sketch-reveal-tab) .sr-np-draft :is(.sr-np-place, .sr-np-date) > :is(input, textarea).sr-np-in { font-size: .9em; letter-spacing: .04em; }
+/* baner: wersaliki farbą akcentu */
+:is(.sketch-reveal, .sketch-reveal-tab) .sr-np-draft .sr-np-kicker > :is(input, textarea).sr-np-in {
+  font-family: "Modesto Condensed", Signika, sans-serif; font-weight: 700; font-size: 1.2em; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--sr-accent);
+}
+:is(.sketch-reveal, .sketch-reveal-tab) .sr-np-draft .sr-np-kicker > :is(input, textarea).sr-np-in::placeholder { text-transform: none; letter-spacing: 0; font-weight: 400; font-style: italic; font-family: inherit; font-size: .85em; }
+/* nagłówek: wąski grotesk wersalikami jak na stronie */
+:is(.sketch-reveal, .sketch-reveal-tab) .sr-np-draft .sr-np-headline > :is(input, textarea).sr-np-in {
+  font-family: "Modesto Condensed", Signika, sans-serif; font-weight: 700; font-size: 1.75em; line-height: 1.02; text-transform: uppercase; letter-spacing: .01em;
+}
+:is(.sketch-reveal, .sketch-reveal-tab) .sr-np-draft[data-style="modern"] .sr-np-headline > :is(input, textarea).sr-np-in {
+  font-family: Signika, "Segoe UI", Arial, sans-serif; font-stretch: condensed; letter-spacing: -.02em;
+}
+:is(.sketch-reveal, .sketch-reveal-tab) .sr-np-draft .sr-np-deck > :is(input, textarea).sr-np-in { font-weight: 700; }
+:is(.sketch-reveal, .sketch-reveal-tab) .sr-np-draft[data-style="modern"] .sr-np-deck > :is(input, textarea).sr-np-in { font-weight: 400; font-style: italic; }
+:is(.sketch-reveal, .sketch-reveal-tab) .sr-np-draft .sr-np-caption > :is(input, textarea).sr-np-in { font-style: italic; font-size: .92em; }
+/* pozostałe nagłówki: półgruby szeryf, rubryka mówi, gdzie stoi */
+:is(.sketch-reveal, .sketch-reveal-tab) .sr-np-draft .sr-np-story > :is(input, textarea).sr-np-in { font-weight: 700; font-size: .98em; }
+:is(.sketch-reveal, .sketch-reveal-tab) .sr-np-draft[data-style="modern"] .sr-np-story > :is(input, textarea).sr-np-in { font-family: Signika, "Segoe UI", Arial, sans-serif; font-weight: 600; }
+.sr-np-draft .sr-np-divider {
+  margin: .55rem 0 .15rem calc(var(--sr-slug) + .7rem); padding-top: .4rem;
+  border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  font-size: .72em; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--sr-ink-soft);
+}
+@media (prefers-reduced-motion: reduce) { .sr-np-draft .sr-np-row { transition: none; } }

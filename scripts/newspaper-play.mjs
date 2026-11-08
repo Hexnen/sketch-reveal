@@ -7,8 +7,8 @@
    zgłaszamy gotowość, czekamy na „tgo” i odlatujemy. Każdy klient fotografuje SWÓJ widok (własna kamera, mgła, tokeny). */
 import { MODULE_ID } from "./config.mjs";
 import {
-  DEFAULT_NEWSPAPER, HOLD_MS, NEWSPAPER_LIMITS, cameraEase, coverView, createNewspaper, ensurePaperFont, photoCrop, prefersReducedMotion,
-  REVEAL_ZOOM, revealCameraMs, sameRect, sanitizeNewspaper,
+  DEFAULT_NEWSPAPER, HOLD_MS, NEWSPAPER_DEFAULT_TEXT, NEWSPAPER_LIMITS, NEWSPAPER_SLOTS, cameraEase, coverView, createNewspaper, ensurePaperFont,
+  newspaperText, photoCrop, prefersReducedMotion, REVEAL_ZOOM, revealCameraMs, sameRect, sanitizeNewspaper, usDate,
 } from "./fx/newspaper.mjs";
 import { awaitTransitionGo, prepareTransitionSync, transitionReadyOnly } from "./play.mjs";
 import { clientPerf, getPreset, resolveNewspaper } from "./store.mjs";
@@ -17,7 +17,8 @@ import { uiBounds } from "./ticker-play.mjs";
 const L = (k, d) => (d ? game.i18n.format(`SKETCHREVEAL.${k}`, d) : game.i18n.localize(`SKETCHREVEAL.${k}`));
 const esc = (s) => foundry.utils.escapeHTML(String(s ?? ""));
 const FONT = "Amiri"; // krój szeryfowy z rdzenia Foundry (/fonts/amiri, deklarowany w CSS rdzenia) — bez pobierania
-const SANS = "Signika"; // bezszeryfowy krój rdzenia Foundry — tytuły współczesnej gazety
+const SANS = "Signika"; // bezszeryfowy krój rdzenia Foundry — tytuły współczesnej gazety (pełne polskie znaki)
+const COND = "Modesto Condensed"; // wąski krój rdzenia Foundry (700 = grotesk nagłówków dziennika z lat 30.; bez polskich znaków)
 const GUARD_MS = 45000;
 const CAPTURE_MAX_W = 1920;
 
@@ -152,7 +153,7 @@ function stage(data, { sceneId = null, preview = false } = {}) {
   const perf = clientPerf();
   const b = uiBounds();
   const np = createNewspaper({
-    host: overlay, photo, cover, crop, coverBg: bg, data, family: FONT, sansFamily: SANS,
+    host: overlay, photo, cover, crop, coverBg: bg, data, family: FONT, sansFamily: SANS, condFamily: COND,
     reduced: prefersReducedMotion(),
     // lżejsza wersja (bez smug, mniejsza rozdzielczość strony) przy lekkich animacjach albo obniżonym podglądzie
     lite: perf.liteTitle || perf.preview !== "full",
@@ -281,7 +282,7 @@ export async function previewNewspaper(raw = DEFAULT_NEWSPAPER) {
 }
 
 /** Krój strony: rozgrzej przy starcie, żeby pierwsza gazeta nie czekała na plik czcionki. */
-export function warmNewspaperFont() { ensurePaperFont(FONT, 4000); ensurePaperFont(SANS, 4000); }
+export function warmNewspaperFont() { ensurePaperFont(FONT, 4000); ensurePaperFont(SANS, 4000); ensurePaperFont(COND, 4000); }
 
 /** Do testów z konsoli: ostatni przebieg (czasy zrzutu, budowy, czekania, odlotu) i stan bieżący. */
 export const newspaperDebug = () => ({ ...last, active: !!cur, sceneId: cur?.sceneId ?? null, syncId: cur?.syncId ?? null, preview: cur?.preview ?? null });
@@ -295,6 +296,101 @@ const group = (label, inner, hint = "", extra = "") =>
 const select = (name, v, opts) =>
   `<select name="${name}">${opts.map(([val, lab]) => `<option value="${esc(val)}"${String(val) === String(v) ? " selected" : ""}>${esc(lab)}</option>`).join("")}</select>`;
 
+/**
+ * Szkic pierwszej strony — pola pisze się jak tekst, nie jak formularz: winieta, linia z miejscem i datą, baner, nagłówek,
+ * podtytuł, podpis zdjęcia i nagłówki pozostałych artykułów (rubryki z lewej mówią, gdzie trafi każdy wiersz).
+ * `prefix` — prefiks nazw pól („newspaper” w edytorze, „flags.sketch-reveal.newspaper” w zakładce sceny), `values` — wpisany
+ * tekst, `ph` — tekst, który wydrukuje się przy pustym polu (szary), `style` — wygląd (rubryki nagłówków listy).
+ */
+export function newspaperDraftHtml({ prefix, values = {}, ph, style = "classic", kickerPh = "", accent = DEFAULT_NEWSPAPER.accent, legend, hint = "", extra = "" }) {
+  const Lm = NEWSPAPER_LIMITS;
+  const uid = foundry.utils.randomID(6);
+  let k = 0;
+  const field = (name, value, placeholder, max, multi = false) => {
+    const id = `sr-np-${uid}-${k++}`;
+    const common = `id="${id}" class="sr-np-in" name="${prefix}.${name}" data-np="${name}" maxlength="${max}" placeholder="${esc(placeholder)}" spellcheck="true"`;
+    return { id, html: multi ? `<textarea ${common} rows="1">${esc(value)}</textarea>` : `<input type="text" ${common} value="${esc(value)}">` };
+  };
+  const row = (cls, label, f) => `<div class="sr-np-row sr-np-${cls}"><label class="sr-np-slug" for="${f.id}">${esc(label)}</label>${f.html}</div>`;
+  const slots = NEWSPAPER_SLOTS[style] ?? NEWSPAPER_SLOTS.classic;
+  const stories = Array.from({ length: Lm.stories }, (_, i) =>
+    row("story", L(`NewsSlot.${slots[i]}`), field(`stories.${i}`, values.stories?.[i] ?? "", ph.stories[i] ?? "", Lm.story))).join("");
+  return `
+  <fieldset class="sr-newspaper-form sr-np-draft" data-sr="newspaper-draft" data-style="${esc(style)}" style="--sr-accent: ${esc(accent)}"${extra}>
+    <legend>${esc(legend)}</legend>
+    ${hint ? `<p class="hint">${esc(hint)}</p>` : ""}
+    <div class="sr-np-sheet">
+      ${row("masthead", L("NewsField.masthead"), field("masthead", values.masthead ?? "", ph.masthead, Lm.masthead))}
+      ${row("place", L("NewsField.place"), field("place", values.place ?? "", ph.place, Lm.place))}
+      ${row("date", L("NewsField.date"), field("date", values.date ?? "", ph.date, Lm.date))}
+      ${row("kicker", L("NewsField.kicker"), field("kicker", values.kicker ?? "", kickerPh, Lm.kicker))}
+      ${row("headline", L("NewsField.headline"), field("headline", values.headline ?? "", ph.headline, Lm.headline, true))}
+      ${row("deck", L("NewsField.deck"), field("deck", values.deck ?? "", ph.deck, Lm.deck, true))}
+      ${row("caption", L("NewsField.caption"), field("caption", values.caption ?? "", ph.caption, Lm.caption, true))}
+      <p class="sr-np-divider">${esc(L("NewsDraft.Stories"))}</p>
+      ${stories}
+    </div>
+  </fieldset>`;
+}
+
+/** Placeholdery szkicu w edytorze presetu: teksty domyślne wyglądu (to wydrukuje się przy pustym polu). */
+const presetPh = (style) => ({ ...(NEWSPAPER_DEFAULT_TEXT[style] ?? NEWSPAPER_DEFAULT_TEXT.classic), date: usDate() });
+
+/**
+ * Ożyw szkic w `root`: pola wieloliniowe rosną z tekstem (Enter nie łamie — nagłówek to jeden akapit, wklejone podziały
+ * wierszy → spacje). Zwraca refresh(): `resolve()` → {style, ph, kickerPh, accent} odświeża rubryki i szare podpowiedzi.
+ */
+export function bindNewspaperDraft(root, resolve = null) {
+  const draft = root?.querySelector?.('[data-sr="newspaper-draft"]');
+  if (!draft) return null;
+  const grow = (t) => { t.style.height = "auto"; t.style.height = `${t.scrollHeight}px`; };
+  for (const t of draft.querySelectorAll("textarea.sr-np-in")) {
+    t.addEventListener("input", () => grow(t));
+    t.addEventListener("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); });
+    t.addEventListener("paste", (e) => {
+      const txt = e.clipboardData?.getData("text");
+      if (!txt || !/[\r\n]/.test(txt)) return;
+      e.preventDefault();
+      t.setRangeText(txt.replace(/\s*[\r\n]+\s*/g, " "), t.selectionStart, t.selectionEnd, "end");
+      t.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    requestAnimationFrame(() => grow(t));
+  }
+  const refresh = () => {
+    const r = resolve?.();
+    if (!r) return;
+    draft.dataset.style = r.style;
+    if (r.accent) draft.style.setProperty("--sr-accent", r.accent);
+    const slots = NEWSPAPER_SLOTS[r.style] ?? NEWSPAPER_SLOTS.classic;
+    for (const el of draft.querySelectorAll("[data-np]")) {
+      const key = el.dataset.np, m = /^stories\.(\d+)$/.exec(key);
+      if (m) {
+        el.placeholder = r.ph.stories[+m[1]] ?? "";
+        const lab = draft.querySelector(`label[for="${el.id}"]`);
+        if (lab) lab.textContent = L(`NewsSlot.${slots[+m[1]]}`);
+      } else el.placeholder = key === "kicker" ? r.kickerPh ?? "" : r.ph[key] ?? "";
+    }
+  };
+  return refresh;
+}
+
+/** Edytor presetu: szkic pierwszej strony podąża za wyglądem (rubryki, teksty domyślne) i kolorem akcentu. */
+export function bindNewspaperForm(root) {
+  const val = (sel) => root.querySelector(sel)?.value;
+  const style = () => val('select[name="newspaper.style"]') ?? "classic";
+  const refresh = bindNewspaperDraft(root, () => ({ style: style(), ph: presetPh(style()), kickerPh: L("NewsDraft.NoKicker"), accent: val('input[name="newspaper.accent"]') }));
+  if (!refresh) return;
+  root.querySelector('select[name="newspaper.style"]')?.addEventListener("change", refresh);
+  root.querySelector('input[name="newspaper.accent"]')?.addEventListener("input", refresh);
+}
+
+/** Placeholdery zakładki sceny: tekst, który wydrukuje preset (puste pole sceny = tekst presetu). */
+export function sceneDraftPlaceholders(presetNewspaper) {
+  const n = sanitizeNewspaper(presetNewspaper);
+  const t = newspaperText(n);
+  return { style: n.style, accent: n.accent, ph: { ...t, date: n.date || usDate() }, kickerPh: n.kicker || L("NewsDraft.NoKicker") };
+}
+
 /** HTML sekcji gazety (pola pod prefiksem "newspaper."; marker data-sr="newspaper" mówi edytorowi, że sekcja jest w DOM). */
 export function newspaperFormHtml(raw) {
   const n = sanitizeNewspaper(raw);
@@ -303,11 +399,10 @@ export function newspaperFormHtml(raw) {
   <fieldset class="sr-newspaper-form" data-sr="newspaper"><legend>${esc(L("Section.Newspaper"))}</legend>
     <p class="hint">${esc(L("Hint.Newspaper"))}</p>
     ${group(L("Field.PaperStyle"), select("newspaper.style", n.style, [["classic", L("PaperStyle.classic")], ["modern", L("PaperStyle.modern")]]), L("Hint.PaperStyle"))}
-    ${group(L("Field.Masthead"), `<input type="text" name="newspaper.masthead" maxlength="${NEWSPAPER_LIMITS.masthead}" value="${esc(n.masthead)}" placeholder="${esc(L("Field.MastheadPh"))}">`, L("Hint.Masthead"))}
-    ${group(L("Field.PaperHeadline"), `<input type="text" name="newspaper.headline" maxlength="${NEWSPAPER_LIMITS.headline}" value="${esc(n.headline)}" placeholder="${esc(L("Field.PaperHeadlinePh"))}">`, L("Hint.PaperHeadline"))}
     ${group(L("Field.PaperColor"), `<input type="color" name="newspaper.paper" value="${esc(n.paper)}">`, "", ' data-showif="newspaper.style" data-showif-is="classic"')}
-    ${group(L("Field.Accent"), `<input type="color" name="newspaper.accent" value="${esc(n.accent)}">`, L("Hint.PaperAccent"), ' data-showif="newspaper.style" data-showif-is="modern"')}
+    ${group(L("Field.Accent"), `<input type="color" name="newspaper.accent" value="${esc(n.accent)}">`, L("Hint.PaperAccent"))}
   </fieldset>
+  ${newspaperDraftHtml({ prefix: "newspaper", values: n, ph: presetPh(n.style), style: n.style, kickerPh: L("NewsDraft.NoKicker"), accent: n.accent, legend: L("NewsDraft.Legend"), hint: L("NewsDraft.Hint") })}
   <fieldset class="sr-newspaper-form"><legend>${esc(L("Section.Spin"))}</legend>
     ${group(L("Field.SpinSec"), range("spinSec", 1, 5, 0.1), L("Hint.SpinSec"))}
     ${group(L("Field.Turns"), range("turns", 1, 6, 1))}

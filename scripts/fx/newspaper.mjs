@@ -1,20 +1,60 @@
 /* „Wirująca gazeta” — przejście sceny w stylu filmowej kroniki.
-   To, co gracz właśnie widział na płótnie, staje się zdjęciem na pierwszej stronie gazety (raster, papier, winieta,
-   nieczytelny tekst): kamera odjeżdża od zdjęcia i strona osiada na rozmytym tle starej sceny. Po wspólnym starcie strona
+   To, co gracz właśnie widział na płótnie, staje się zdjęciem na pierwszej stronie amerykańskiej gazety (raster, papier,
+   winieta, łamy): kamera odjeżdża od zdjęcia i strona osiada na rozmytym tle starej sceny. Po wspólnym starcie strona
    unosi się, wiruje z przyspieszeniem i odlatuje w głąb, a spod niej wyłania się nowa mapa.
    Czysty DOM + Canvas 2D + Web Animations API — bez Foundry (tools/harness-newspaper.html importuje go wprost).
+
+   Dwa wyglądy (oba amerykańskie, nazwy wyłącznie zmyślone):
+   - classic — wielkomiejski dziennik z lat 30.–40.: uszy (pogoda, wydanie), szeryfowa winieta, linia numeru z datą i ceną
+     w centach, baner EXTRA farbą dodatkową, wąski grotesk wersalikami w nagłówkach, schodkowy podtytuł, raster zdjęcia,
+     szpalty z liniami, bylina, dateline „HARBOR CITY, Nov. 8 —”, „Continued on Page 4”, ramka „In Brief”, indeks u dołu.
+   - modern — współczesny tabloid: kolorowa belka z winietą i zapowiedziami ze stronami, data po amerykańsku i cena w $,
+     etykieta + ogromny ścieśniony nagłówek, kolorowe zdjęcie z belką podpisu, 3 łamy, ramki boczne, rząd kart.
+   Każdy czytelny napis to prawdziwy angielski: winietę, nagłówki, podtytuł, etykietę, podpis i nagłówki pozostałych
+   artykułów MG edytuje (puste = tekst domyślny wyglądu), a łamy wypełnia neutralna proza agencyjna (prawdziwe zdania).
 
    Warstwy (od dołu): tło (stara scena rozmyta i przyciemniona) → cień strony → smugi (kopie strony opóźnione o kilka ms,
    widoczne tylko przy dużej prędkości kątowej = rozmycie ruchu) → strona (płótno 2D + czyste zdjęcie, które przenika się
    z rastrem). Wszystkie ruchy to transform/opacity (kompozytor), klatki kluczowe liczone z funkcji pozy (własne krzywe). */
 
-export const NEWSPAPER_LIMITS = Object.freeze({ masthead: 40, headline: 90 });
-export const DEFAULT_NEWSPAPER = Object.freeze({
-  style: "classic", masthead: "Kurier Wieczorny", headline: "", paper: "#ebe3cf", accent: "#d0121b",
-  spinSec: 2.4, turns: 3, direction: "cw", playerSkip: false,
-});
-/** Wygląd strony: dawny dziennik (raster, szeryfy, pożółkły papier) albo współczesny kolorowy tabloid. */
+/** Limity znaków pól tekstu (klucz = nazwa pola; `story` — jeden nagłówek z listy, `stories` — ile nagłówków). */
+export const NEWSPAPER_LIMITS = Object.freeze({ masthead: 40, kicker: 24, headline: 90, deck: 160, caption: 140, story: 80, stories: 6, place: 32, date: 48 });
+/** Pojedyncze pola tekstu strony (lista nagłówków `stories` osobno). Puste = tekst domyślny wyglądu; `kicker` pusty = bez etykiety. */
+export const NEWSPAPER_TEXT_KEYS = Object.freeze(["masthead", "kicker", "headline", "deck", "caption", "place", "date"]);
+/** Wygląd strony: amerykański dziennik z lat 30.–40. (raster, szeryfy, pożółkły papier) albo współczesny kolorowy tabloid. */
 export const NEWSPAPER_STYLES = Object.freeze(["classic", "modern"]);
+/** Gdzie trafia każdy z nagłówków listy `stories` (klucze etykiet edytora: SKETCHREVEAL.NewsSlot.*). */
+export const NEWSPAPER_SLOTS = Object.freeze({
+  classic: Object.freeze(["side", "lower", "brief", "brief", "brief", "brief"]),
+  modern: Object.freeze(["teaser", "teaser", "box", "card", "card", "card"]),
+});
+
+const frz = (o) => Object.freeze({ ...o, stories: Object.freeze(o.stories) });
+/** Tekst domyślny (US English, wyłącznie zmyślone nazwy — żadnych prawdziwych tytułów prasowych). */
+export const NEWSPAPER_DEFAULT_TEXT = Object.freeze({
+  classic: frz({
+    masthead: "The Harbor City Clarion", kicker: "Extra",
+    headline: "Mystery Deepens as City Awaits Answers",
+    deck: "Witnesses Describe Strange Events Near the Waterfront; Officials Promise a Full Inquiry",
+    caption: "The scene as our staff photographer found it only moments ago.",
+    place: "Harbor City", date: "",
+    stories: ["Council Called to Emergency Session", "Harbor Traffic Halted Until Further Notice", "Night Patrols Doubled Downtown",
+      "Museum Reports a Missing Artifact", "Storm Warning Posted Along the Coast", "Railroad Promises Faster Service"],
+  }),
+  modern: frz({
+    masthead: "Metro Flash", kicker: "Exclusive",
+    headline: "City on Edge",
+    deck: "Witnesses describe a night nobody saw coming, and officials still won't say why.",
+    caption: "The scene moments ago, as captured by a reader.",
+    place: "Harbor City", date: "",
+    stories: ["What we know so far", "Traffic snarled across downtown", "Mayor calls an emergency meeting",
+      "Local heroes or vigilantes?", "Weekend storm on the way", "Tickets sell out in minutes"],
+  }),
+});
+export const DEFAULT_NEWSPAPER = Object.freeze({
+  style: "classic", masthead: "", headline: "", deck: "", caption: "", stories: Object.freeze([]), place: "", date: "",
+  paper: "#ebe3cf", accent: "#d0121b", spinSec: 2.4, turns: 3, direction: "cw", playerSkip: false,
+});
 /** Czasy (ms): uformowanie strony, chwila na „przeczytanie” przed odlotem, spokojne wejście/wyjście (reduced motion). */
 export const PRESS_MS = 1450, HOLD_MS = 450, CALM_IN_MS = 650, CALM_OUT_MS = 900;
 /** Najazd kamery na samą mapę, zanim kadr stanie się zdjęciem (gdy na ekranie było widać tło poza sceną). */
@@ -65,24 +105,80 @@ const num = (v, d, a, b) => {
   const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
   return Number.isFinite(n) ? clamp(n, a, b) : d;
 };
-const line = (v, max) => (typeof v === "string" ? v.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max) : "");
+/** Jedna linia tekstu: znaki sterujące i białe znaki → spacja, przycięcie, limit znaków (po punktach kodowych, bez rozcinania par). */
+const line = (v, max) => (typeof v === "string" ? [...v.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ").replace(/\s+/g, " ").trim()].slice(0, max).join("").trim() : "");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
 
-/** Konfiguracja gazety z dowolnego wejścia (formularz, import, gniazdo) — zawsze poprawny obiekt. */
+/** Lista nagłówków z tablicy, obiektu {0: …, 1: …} (pola formularza) albo tekstu wieloliniowego. Puste pozycje zostają (= domyślny). */
+function storyList(v) {
+  let arr = [];
+  if (Array.isArray(v)) arr = v;
+  else if (typeof v === "string") arr = v.split(/\r?\n/);
+  else if (v && typeof v === "object") for (let i = 0; i < NEWSPAPER_LIMITS.stories; i++) arr.push(Object.hasOwn(v, i) ? v[i] : "");
+  const out = arr.slice(0, NEWSPAPER_LIMITS.stories).map((s) => line(s, NEWSPAPER_LIMITS.story));
+  while (out.length && !out[out.length - 1]) out.pop();
+  return out;
+}
+
+/** Konfiguracja gazety z dowolnego wejścia (formularz, import, gniazdo, stary preset) — zawsze poprawny obiekt. */
 export function sanitizeNewspaper(raw) {
   const r = raw && typeof raw === "object" ? raw : {};
+  const style = NEWSPAPER_STYLES.includes(r.style) ? r.style : DEFAULT_NEWSPAPER.style;
+  const L = NEWSPAPER_LIMITS;
   return {
-    style: NEWSPAPER_STYLES.includes(r.style) ? r.style : DEFAULT_NEWSPAPER.style,
-    // pusta winieta = też udawane litery (klucz obecny, ale pusty); brak klucza = domyślna nazwa
-    masthead: typeof r.masthead === "string" ? line(r.masthead, NEWSPAPER_LIMITS.masthead) : DEFAULT_NEWSPAPER.masthead,
-    headline: line(r.headline, NEWSPAPER_LIMITS.headline),
+    style,
+    // puste = tekst domyślny wyglądu (stare presety: pusta winieta / nagłówek dawały udawane litery — teraz prawdziwy tekst)
+    masthead: line(r.masthead, L.masthead),
+    // etykieta: brak klucza = domyślna wyglądu („Extra” / „Exclusive”), pusty tekst = bez etykiety
+    kicker: typeof r.kicker === "string" ? line(r.kicker, L.kicker) : NEWSPAPER_DEFAULT_TEXT[style].kicker,
+    headline: line(r.headline, L.headline),
+    deck: line(r.deck, L.deck),
+    caption: line(r.caption, L.caption),
+    stories: storyList(r.stories),
+    place: line(r.place, L.place),
+    date: line(r.date, L.date),
     paper: typeof r.paper === "string" && HEX.test(r.paper) ? r.paper.toLowerCase() : DEFAULT_NEWSPAPER.paper,
     accent: typeof r.accent === "string" && HEX.test(r.accent) ? r.accent.toLowerCase() : DEFAULT_NEWSPAPER.accent,
     spinSec: Math.round(num(r.spinSec, DEFAULT_NEWSPAPER.spinSec, 1, 5) * 10) / 10,
     turns: Math.round(num(r.turns, DEFAULT_NEWSPAPER.turns, 1, 6)),
     direction: r.direction === "ccw" ? "ccw" : "cw",
     playerSkip: r.playerSkip === true,
+  };
+}
+
+/**
+ * Nadpisania tekstu per scena: każde NIEPUSTE pole `ov` zastępuje pole presetu (puste = tekst presetu); nagłówki listy —
+ * pozycja po pozycji (pusta linia = nagłówek presetu). Wygląd, kolory i obrót zawsze z presetu.
+ */
+export function applyNewspaperOverride(base, ov) {
+  const b = sanitizeNewspaper(base);
+  if (!ov || typeof ov !== "object") return b;
+  const o = { ...b };
+  for (const k of NEWSPAPER_TEXT_KEYS) { const v = line(ov[k], NEWSPAPER_LIMITS[k]); if (v) o[k] = v; }
+  const s = storyList(ov.stories);
+  o.stories = Array.from({ length: Math.max(b.stories.length, s.length) }, (_, i) => s[i] || b.stories[i] || "");
+  return sanitizeNewspaper(o);
+}
+
+const MONTHS_AP = ["Jan.", "Feb.", "March", "April", "May", "June", "July", "Aug.", "Sept.", "Oct.", "Nov.", "Dec."];
+/** Data po amerykańsku: „Saturday, November 8, 2026”. */
+export const usDate = (d = new Date()) => d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+
+/**
+ * Tekst do druku: pola konfiguracji, a w miejsce pustych — tekst domyślny wyglądu. `date` puste = dzisiejsza data (US);
+ * `short` — skrót daty do datelinii („Nov. 8”), gdy wpisaną datę da się odczytać (inaczej pusty — dateline bez daty).
+ */
+export function newspaperText(d, now = new Date()) {
+  const def = NEWSPAPER_DEFAULT_TEXT[d.style] ?? NEWSPAPER_DEFAULT_TEXT.classic;
+  const pick = (k) => d[k] || def[k];
+  let when = now;
+  if (d.date) { const t = Date.parse(d.date); when = Number.isFinite(t) ? new Date(t) : null; }
+  return {
+    masthead: pick("masthead"), kicker: d.kicker ?? "", headline: pick("headline"), deck: pick("deck"), caption: pick("caption"),
+    place: pick("place"), date: d.date || usDate(now), year: (when ?? now).getFullYear(),
+    short: when ? `${MONTHS_AP[when.getMonth()]} ${when.getDate()}` : "",
+    stories: def.stories.map((s, i) => d.stories?.[i] || s),
   };
 }
 
@@ -94,11 +190,11 @@ export function prefersReducedMotion() {
 export async function ensurePaperFont(family, timeoutMs = 1500) {
   if (!family || !document.fonts?.load) return false;
   const want = [`400 20px "${family}"`, `700 20px "${family}"`];
-  const ok = await Promise.race([Promise.all(want.map((f) => document.fonts.load(f))).then((r) => r.every((x) => x.length > 0)), sleep(timeoutMs).then(() => false)]);
+  const ok = await Promise.race([Promise.all(want.map((f) => document.fonts.load(f))).then((r) => r.some((x) => x.length > 0)), sleep(timeoutMs).then(() => false)]);
   return !!ok;
 }
 
-/* ================================================================ losowość i „tekst” */
+/* ================================================================ losowość i proza */
 function mulberry(seed) {
   let a = seed >>> 0 || 1;
   return () => {
@@ -109,21 +205,76 @@ function mulberry(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-const CONS = "bcdfghjklmnprstwzbcdkmnprstlnrstwz", VOW = "aeiouyaeioaeo";
-/** Słowo z losowych liter (naprzemiennie spółgłoski/samogłoski) — z daleka wygląda jak tekst, z bliska nic nie znaczy. */
-function word(r, len = 2 + Math.min(10, Math.floor(-Math.log(1 - r()) * 3.2))) {
-  let s = "", v = r() < 0.35;
-  for (let i = 0; i < len; i++) {
-    const pool = v ? VOW : CONS;
-    s += pool[Math.floor(r() * pool.length)];
-    if (r() < (v ? 0.8 : 0.72)) v = !v;
-  }
-  return s;
-}
-const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
-const words = (r, n, caps = false) => Array.from({ length: n }, () => (caps ? cap(word(r)) : word(r))).join(" ");
 
-/* ================================================================ strona */
+/**
+ * Łamy: neutralna proza agencyjna — prawdziwe zdania, pasujące do każdej sceny (nic nie zdradzają, nikogo nie nazywają).
+ * W tempie przejścia tekst jest za mały do czytania, ale w pierwszej chwili fazy „press” strona jest ogromna — wtedy widać
+ * zwykłe angielskie zdania, nie bełkot ani szare paski (paski wyglądają jak makieta, nie jak gazeta).
+ */
+const PROSE = [
+  "Officials confirmed late yesterday that the matter is now under formal review.",
+  "Witnesses gathered along the street within minutes of the first reports.",
+  "Police asked residents to stay indoors until the area could be secured.",
+  "A spokesman for the mayor's office declined to comment on the details.",
+  "Several shopkeepers said they had noticed nothing unusual earlier in the day.",
+  "The council is expected to meet again before the end of the week.",
+  "Traffic was diverted around the district for most of the afternoon.",
+  "Neighbors described a sudden silence that lasted for several minutes.",
+  "Investigators spent the evening interviewing those who were present.",
+  "No injuries had been reported by the time this edition went to press.",
+  "The harbor master ordered all vessels to remain at their moorings.",
+  "Reporters on the scene counted more than two hundred onlookers.",
+  "An official statement is expected from city hall this morning.",
+  "Older residents compared the scene to events of many years ago.",
+  "Some witnesses insisted that the lights had flickered just before.",
+  "Firemen stood by through the night as a precaution.",
+  "The chief of police promised a full account once the facts are known.",
+  "Merchants along the avenue closed their doors early.",
+  "A crowd remained near the barricades well past midnight.",
+  "City engineers will inspect the site at first light.",
+  "Telephone lines in the area were busy for several hours.",
+  "Late arrivals found the street roped off and guarded by patrolmen.",
+  "Several accounts given to this newspaper could not be confirmed.",
+  "The district attorney has asked for patience while the inquiry proceeds.",
+  "Schools in the neighborhood will open as usual, officials said.",
+  "Railroad officials said service would resume on the regular schedule.",
+  "Members of the council disagreed sharply on what should be done next.",
+  "A reward has been offered for information leading to an arrest.",
+  "The weather bureau forecast clear skies for the remainder of the week.",
+  "Hospital staff said they were prepared for any emergency.",
+  "Families waited at the corner for news of relatives working nearby.",
+  "Detectives are said to be following several promising leads.",
+  "The governor's office has been kept informed throughout the day.",
+  "Volunteers handed out coffee and blankets to those still waiting.",
+  "Insurance agents began arriving shortly after dawn.",
+  "It was the third such incident reported this season.",
+  "Few details were made public before the evening edition closed.",
+  "A full list of closures appears on an inside page.",
+  "Residents are urged to report anything unusual to the nearest precinct.",
+  "The investigation is expected to continue through the coming week.",
+];
+const CROSSHEADS = ["Crowds Gather", "Witnesses Speak", "Officials Silent", "Late Developments", "Questions Remain", "Search Continues", "Calls for Calm", "Inquiry Ordered"];
+
+/** Strumień słów z przetasowanych zdań; akapit = 2–3 zdania (`end` na ostatnim słowie akapitu). */
+function proseStream(r) {
+  const order = PROSE.map((_, i) => i);
+  for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+  let si = 0, left = 0, queue = [];
+  const refill = () => {
+    if (left <= 0) left = 2 + Math.floor(r() * 2);
+    const ws = PROSE[order[si++ % order.length]].split(" ");
+    left--;
+    return ws.map((w, i) => ({ w, end: i === ws.length - 1 && left === 0, sent: i === ws.length - 1 }));
+  };
+  return {
+    peek() { if (!queue.length) queue = refill(); return queue[0]; },
+    next() { const x = this.peek(); queue.shift(); return x; },
+    /** Zakończ bieżący akapit (następne słowo zaczyna nowy). */
+    breakPara() { queue = []; left = 0; },
+  };
+}
+
+/* ================================================================ strona: wspólne narzędzia */
 const lum = (hex) => {
   const n = parseInt(hex.slice(1), 16);
   const c = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
@@ -131,7 +282,20 @@ const lum = (hex) => {
 };
 const inkFor = (paper) => (lum(paper) > 0.2 ? "#1d1a16" : "#f0eadb");
 const mk = (w, h) => { const c = document.createElement("canvas"); c.width = Math.max(1, Math.round(w)); c.height = Math.max(1, Math.round(h)); return c; };
-const serif = (fam) => `${fam ? `"${fam}", ` : ""}Georgia, "Times New Roman", serif`;
+/** Kolor z alfą z #rrggbb. */
+const rgba = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; };
+
+/**
+ * Znaki, które mają kroje rdzenia Foundry Amiri i Modesto Condensed (Latin-1 + typograficzna interpunkcja). Tekst z innymi
+ * znakami (np. polskie ąęłńśźż — MG może pisać po polsku) idzie w całości krojem zastępczym z pełnym zestawem znaków,
+ * zamiast mieszać kroje litera po literze.
+ */
+const LATIN1 = /^[\u0009\u000a -~ -ÿŒœ–—‘’‚“-„•…‹›€]*$/u;
+const covered = (s) => LATIN1.test(s ?? "");
+const SERIF_FALLBACK = 'Georgia, "Times New Roman", serif';
+const SANS_FALLBACK = '"Segoe UI", "Helvetica Neue", Arial, sans-serif';
+/** Wersaliki zgodnie z językiem tekstu (polskie znaki też). */
+const upper = (s) => s.toLocaleUpperCase();
 
 /** Szerokości znaków z pamięcią podręczną (tysiące słów — measureText raz na znak i krój). */
 function measurer(g) {
@@ -151,227 +315,336 @@ function measurer(g) {
 }
 
 /**
- * Narysuj pierwszą stronę. `W` — szerokość płótna (px), `photo` — zrzut widoku, `aspect` — proporcje zdjęcia (= ekranu).
- * Zwraca { canvas, photoRect } (photoRect w px płótna strony).
+ * Narzędzia składu na danym kontekście: pomiar, rysowanie ze ściśnięciem poziomym (sx < 1 — krój ścieśniony z normalnego),
+ * łamanie wierszy (za długie słowo dzielone twardo) i dopasowanie tekstu do ramki (rozmiar ↓ → wiersze ≤ maxLines;
+ * przy minimalnym rozmiarze ostatni wiersz z wielokropkiem; `balance` — wiersze wyrównane długością jak text-wrap: balance).
  */
-export function paintPage({ W, photo, aspect, data, seed = 1, family = null, lite = false, cssScale = 1 }) {
-  const r = mulberry(seed);
-  const u = W / 1000, H = Math.round(W * 1.42);
-  const c = mk(W, H), g = c.getContext("2d");
-  const ink = inkFor(data.paper);
+function typesetter(g) {
   const width = measurer(g);
-  const F = (w, s, it = false) => `${it ? "italic " : ""}${w} ${s.toFixed(2)}px ${serif(family)}`;
-  g.fillStyle = data.paper; g.fillRect(0, 0, W, H);
-  g.fillStyle = ink; g.strokeStyle = ink; g.textBaseline = "alphabetic";
-  const m = 48 * u, cw = W - 2 * m;
-  const rule = (x, y, w, h) => g.fillRect(x, y, w, h);
-
-  /** Kolumna justowanego tekstu od (x, y) do yEnd; zwraca y końca. */
-  const column = (x, y, w, yEnd, { size = 10.6 * u, lead = 13.2 * u, drop = false, subs = true } = {}) => {
-    let base = y + size, lineInPara = 0, paraLen = 3 + Math.floor(r() * 9), sinceSub = 0, dropLines = 0, dropW = 0;
-    if (drop) {
-      g.font = F(700, size * 3.25);
-      const L = cap(word(r, 1)).toUpperCase();
-      dropW = width(L) + 4 * u;
-      g.fillText(L, x, y + size * 2.95);
-      dropLines = 3;
-    }
-    g.font = F(400, size);
-    const space = width(" ");
-    while (base <= yEnd) {
-      if (subs && sinceSub > 16 && lineInPara === 0 && r() < 0.18 && base + lead * 2.6 < yEnd) {
-        // śródtytuł: wolna linia, pogrubione 1–2 słowa na środku
-        g.font = F(700, size * 1.12);
-        const t = words(r, 1 + Math.floor(r() * 2), true);
-        g.textAlign = "center"; g.fillText(t, x + w / 2, base + lead * 0.55); g.textAlign = "left";
-        g.font = F(400, size);
-        base += lead * 1.9; sinceSub = 0;
-        continue;
-      }
-      const indent = (dropLines > 0 ? dropW : 0) + (lineInPara === 0 && !drop ? size * 1.1 : 0);
-      const avail = w - indent;
-      const last = lineInPara === paraLen - 1;
-      const target = last ? avail * (0.25 + r() * 0.6) : avail;
-      const ws = []; let tw = 0;
-      for (;;) {
-        const wd = word(r), ww = width(wd);
-        if (tw + ww + (ws.length ? space : 0) > target) { if (!ws.length) { ws.push(wd.slice(0, 3)); tw = width(ws[0]); } break; }
-        tw += ww + (ws.length ? space : 0); ws.push(wd);
-      }
-      const gap = !last && ws.length > 1 ? (avail - (tw - space * (ws.length - 1))) / (ws.length - 1) : space;
-      let cx = x + indent;
-      for (const wd of ws) { g.fillText(wd, cx, base); cx += width(wd) + gap; }
-      base += lead; sinceSub++;
-      if (dropLines > 0) dropLines--;
-      drop = false;
-      if (++lineInPara >= paraLen) { lineInPara = 0; paraLen = 3 + Math.floor(r() * 9); }
-    }
-    return base - lead;
-  };
-  /** Kilka linii lewego wyrównania (podpis, nadtytuł) w szerokości w. */
-  const lines = (x, y, w, n, size, font, lead = size * 1.25, align = "left") => {
-    g.font = font; g.textAlign = align;
-    for (let i = 0; i < n; i++) {
-      const target = i === n - 1 ? w * (0.4 + r() * 0.45) : w * (0.9 + r() * 0.1);
-      let t = word(r); while (width(`${t} x`) < target) { const nx = `${t} ${word(r)}`; if (width(nx) > w) break; t = nx; }
-      g.fillText(i === 0 ? cap(t) : t, align === "center" ? x + w / 2 : align === "right" ? x + w : x, y + size + i * lead);
-    }
+  const say = (t, x, y, sx = 1, align = "left") => {
+    g.textAlign = align;
+    if (sx === 1) g.fillText(t, x, y);
+    else { g.save(); g.translate(x, y); g.scale(sx, 1); g.fillText(t, 0, 0); g.restore(); }
     g.textAlign = "left";
-    return y + n * lead;
   };
-
-  /* ---- uszy (ramki obok winiety) */
-  let y = 40 * u;
-  const ear = (x) => {
-    g.lineWidth = 1.4 * u; g.strokeRect(x, y, 150 * u, 74 * u);
-    g.font = F(700, 15 * u); g.textAlign = "center"; g.fillText(cap(word(r, 6)), x + 75 * u, y + 24 * u);
-    lines(x + 10 * u, y + 30 * u, 130 * u, 3, 8.6 * u, F(400, 8.6 * u), 11 * u, "center");
-  };
-  ear(m); ear(W - m - 150 * u);
-
-  /* ---- winieta */
-  const mast = data.masthead || `${cap(word(r, 5))} ${cap(word(r, 7))}`;
-  let ms = 92 * u;
-  g.font = F(700, ms);
-  const mastMax = cw - 2 * 172 * u;
-  while (width(mast) > mastMax && ms > 34 * u) { ms -= 2 * u; g.font = F(700, ms); }
-  g.textAlign = "center"; g.fillText(mast, W / 2, y + 47 * u + ms * 0.36); g.textAlign = "left";
-  y += 92 * u;
-  rule(m, y, cw, 1.3 * u); y += 4.2 * u; rule(m, y, cw, 4 * u); y += 6 * u;
-  // linia daty: trzy krótkie wpisy (lewa, środek, prawa) — też udawane
-  g.font = F(400, 10.5 * u);
-  const dl = y + 13 * u;
-  g.fillText(words(r, 3, true), m, dl);
-  g.textAlign = "center"; g.fillText(words(r, 4, true), W / 2, dl);
-  g.textAlign = "right"; g.fillText(words(r, 2, true), W - m, dl); g.textAlign = "left";
-  y += 19 * u; rule(m, y, cw, 1.3 * u); y += 16 * u;
-
-  /* ---- nagłówek: tekst MG (do 2 linii, zmniejszany) albo udawany, rozciągnięty na całą szerokość */
-  const wrap = (text, font, w) => {
-    g.font = font;
-    const out = []; let cur = "";
-    for (const wd of text.split(" ")) {
+  const wrapAt = (text, maxW) => {
+    const out = [];
+    let cur = "";
+    for (let wd of text.split(" ")) {
+      if (!wd) continue;
+      while (width(wd) > maxW && [...wd].length > 1) {
+        const ch = [...wd];
+        let k = ch.length - 1;
+        while (k > 1 && width(ch.slice(0, k).join("")) > maxW) k--;
+        if (cur) { out.push(cur); cur = ""; }
+        out.push(ch.slice(0, k).join("")); wd = ch.slice(k).join("");
+      }
       const nx = cur ? `${cur} ${wd}` : wd;
-      if (cur && width(nx) > w) { out.push(cur); cur = wd; } else cur = nx;
+      if (cur && width(nx) > maxW) { out.push(cur); cur = wd; } else cur = nx;
     }
     if (cur) out.push(cur);
     return out;
   };
-  let hs, hl;
-  if (data.headline) {
-    hs = 64 * u;
-    hl = wrap(data.headline, F(700, hs), cw);
-    while ((hl.length > 2 || hl.some((l) => width(l) > cw)) && hs > 30 * u) { hs -= 2 * u; hl = wrap(data.headline, F(700, hs), cw); }
-    hl = hl.slice(0, 2);
-  } else {
-    hs = 60 * u;
-    const ws = [cap(word(r, 4 + Math.floor(r() * 4))), cap(word(r, 3 + Math.floor(r() * 5))), cap(word(r, 5 + Math.floor(r() * 4)))];
-    g.font = F(700, hs);
-    hs = clamp((hs * cw * 0.95) / width(ws.join(" ")), 44 * u, 70 * u);
-    g.font = F(700, hs);
-    while (width(ws.join(" ")) > cw && ws.length > 1) ws.pop();
-    hl = [ws.join(" ")];
-  }
-  g.font = F(700, hs); g.textAlign = "center";
-  hl.forEach((l, i) => g.fillText(l, W / 2, y + hs * 0.8 + i * hs * 1.04));
-  y += hs * 0.8 + (hl.length - 1) * hs * 1.04 + hs * 0.36;
-  // podtytuł (kursywa)
-  g.font = F(400, 21 * u, true);
-  g.fillText(cap(words(r, 7 + Math.floor(r() * 3))), W / 2, y + 20 * u); g.textAlign = "left";
-  y += 34 * u; rule(m, y, cw, 1.3 * u); y += 16 * u;
+  /** `face(size)` → {font, sx}. Zwraca {size, lines, font, sx, truncated}. */
+  const fit = (text, { face, maxW, maxLines, max, min, balance = false }) => {
+    let size = max, f, lines;
+    for (;;) {
+      f = face(size); g.font = f.font;
+      lines = wrapAt(text, maxW / f.sx);
+      if (lines.length <= maxLines || size <= min) break;
+      size = Math.max(min, size - Math.max(0.25, (max - min) / 30));
+    }
+    let truncated = false;
+    if (lines.length > maxLines) {
+      truncated = true;
+      lines = lines.slice(0, maxLines);
+      const lim = maxW / f.sx;
+      let last = lines[maxLines - 1];
+      while ([...last].length > 1 && width(`${last}…`) > lim) {
+        const cut = last.replace(/\s*\S+$/, "");
+        last = cut && cut !== last ? cut : [...last].slice(0, -1).join("");
+      }
+      lines[maxLines - 1] = `${last.replace(/[\s,;:.—–-]+$/u, "")}…`;
+    } else if (balance && lines.length > 1) {
+      const n = lines.length;
+      let lo = maxW * 0.35, hi = maxW;
+      for (let i = 0; i < 12; i++) { const mid = (lo + hi) / 2; if (wrapAt(text, mid / f.sx).length <= n) hi = mid; else lo = mid; }
+      lines = wrapAt(text, hi / f.sx);
+    }
+    g.font = f.font;
+    return { size, lines, font: f.font, sx: f.sx, truncated };
+  };
+  /**
+   * Wytłuszczone wejście akapitu (dateline) na początku szpalty bieżącym krojem: długie łamie się na osobne wiersze,
+   * ostatni kawałek zostaje w wierszu z tekstem, gdy zajmuje ≤ 70 % szerokości. `y` — linia bazowa pierwszego wiersza,
+   * `step` — interlinia. Zwraca {lines: pełne wiersze nad tekstem, sw: wcięcie tekstu w wierszu z tekstem}.
+   */
+  const leadIn = (text, x, y, w, space, step) => {
+    const ls = wrapAt(text, w);
+    let last = ls.pop(), lines = 0;
+    for (const l of ls) say(l, x, y + step * lines++);
+    if (width(last) + space > w * 0.7) { say(last, x, y + step * lines++); last = ""; }
+    if (!last) return { lines, sw: 0 };
+    say(last, x, y + step * lines);
+    return { lines, sw: width(last) + space };
+  };
+  return { width, say, wrapAt, fit, leadIn };
+}
 
-  /* ---- siatka łamu: 5 kolumn; zdjęcie na 4 kolumny, 5. kolumna z nadtytułem i tekstem */
+/* ================================================================ strona klasyczna (amerykański dziennik, lata 30.–40.) */
+const CLASSIC_EARS = [
+  { title: "WEATHER", lines: ["Fair and cooler tonight;", "Sunday partly cloudy,", "light westerly winds."] },
+  { title: "HOME EDITION", lines: ["Complete Stock Market", "Closing Prices", "on Page 31"] },
+];
+const CLASSIC_INDEX = "INSIDE TODAY — Comics, Page 14 · Editorials, Page 10 · Financial, Page 28 · Radio, Page 22 · Sports, Page 18";
+
+/**
+ * Pierwsza strona dziennika. `W` — szerokość płótna (px), `photo` — zrzut widoku, `aspect` — proporcje zdjęcia (= ekranu).
+ * `fonts` = {serif, sans, cond} (nazwy krojów załadowanych w dokumencie albo null → kroje systemowe).
+ * Zwraca { canvas, photoRect, H } (photoRect w px płótna strony).
+ */
+export function paintPage({ W, photo, aspect, data, seed = 1, fonts = {}, lite = false, cssScale = 1, now = new Date() }) {
+  const r = mulberry(seed);
+  const T = newspaperText(data, now);
+  const u = W / 1000, H = Math.round(W * 1.42);
+  const c = mk(W, H), g = c.getContext("2d");
+  const ink = inkFor(data.paper), spot = data.accent;
+  const { width, say, fit, leadIn } = typesetter(g);
+  /** Szeryf: Amiri, gdy ma wszystkie znaki tekstu, inaczej systemowy szeryf z polskimi znakami. */
+  const SER = (w, s, txt = "", it = false) => `${it ? "italic " : ""}${w} ${s.toFixed(2)}px ${fonts.serif && covered(txt) ? `"${fonts.serif}", ` : ""}${SERIF_FALLBACK}`;
+  /** Wąski grotesk nagłówków: Modesto Condensed, a bez niego (albo bez znaków) Signika ścieśniona do 80 %. */
+  const COND = (s, txt = "") => (fonts.cond && covered(txt)
+    ? { font: `700 ${s.toFixed(2)}px "${fonts.cond}", ${SANS_FALLBACK}`, sx: 1 }
+    : { font: `700 ${s.toFixed(2)}px ${fonts.sans ? `"${fonts.sans}", ` : ""}${SANS_FALLBACK}`, sx: 0.8 });
+  g.fillStyle = data.paper; g.fillRect(0, 0, W, H);
+  g.fillStyle = ink; g.strokeStyle = ink; g.textBaseline = "alphabetic";
+  const m = 48 * u, cw = W - 2 * m;
+  const rule = (x, y, w, h) => g.fillRect(x, y, w, h);
+  const stream = proseStream(r);
+  let crossK = Math.floor(r() * CROSSHEADS.length);
+
+  /**
+   * Szpalta justowanej prozy od (x, y) do yEnd: `start` — dateline wytłuszczony na początku pierwszego wiersza, `jump` —
+   * kursywą na końcu („Continued on Page 4”), `subs` — śródtytuły. Zwraca y ostatniej linii bazowej.
+   */
+  const column = (x, y, w, yEnd, { size = 10.2 * u, lead = 12.7 * u, start = "", jump = "", subs = true, src = stream, sentence = false } = {}) => {
+    let base = y + size, para0 = !start, sinceSub = 0, first = true;
+    const end = jump ? yEnd - lead : yEnd;
+    g.font = SER(400, size); const space = width(" ");
+    while (base <= end) {
+      if (subs && !first && para0 && sinceSub > 12 && r() < 0.24 && base + lead * 2.4 < end) {
+        const t = CROSSHEADS[crossK++ % CROSSHEADS.length];
+        g.font = SER(700, size * 1.08, t); say(t, x + w / 2, base + lead * 0.5, 1, "center");
+        g.font = SER(400, size); base += lead * 1.9; sinceSub = 0;
+        continue;
+      }
+      let cx = x, avail = w;
+      if (first && start) {
+        g.font = SER(700, size, start);
+        const lead0 = leadIn(start, x, base, w, space, lead);
+        base += lead0.lines * lead; cx += lead0.sw; avail -= lead0.sw; g.font = SER(400, size);
+      } else if (para0) { cx += size * 1.1; avail -= size * 1.1; }
+      const ws = []; let tw = 0, paraEnd = false;
+      for (;;) {
+        const nx = src.peek(), ww = width(nx.w), add = (ws.length ? space : 0) + ww;
+        if (ws.length && tw + add > avail) break;
+        src.next(); ws.push(nx.w); tw += add;
+        if (nx.end || (sentence && nx.sent)) { paraEnd = true; break; }
+        if (tw >= avail) break;
+      }
+      const inner = tw - space * Math.max(0, ws.length - 1);
+      let gap = !paraEnd && ws.length > 1 ? (avail - inner) / (ws.length - 1) : space;
+      if (gap > space * 3.2) gap = space; // rzadki przypadek: dwa długie słowa — lepiej bez justowania niż „rzeka”
+      for (const wd of ws) { say(wd, cx, base); cx += width(wd) + gap; }
+      base += lead; sinceSub++; first = false; para0 = paraEnd;
+      if (sentence && paraEnd) break; // krótka wiadomość: jedno pełne zdanie
+    }
+    if (jump) { g.font = SER(400, size * 0.92, jump, true); say(jump, x + w, Math.min(base, yEnd), 1, "right"); g.font = SER(400, size); }
+    return base - lead;
+  };
+  /** Wiersze dopasowanego tekstu wyśrodkowane (albo od lewej) — zwraca y pod ostatnim wierszem. */
+  const block = (fitted, x, y, w, pitch, align = "center", asc = 0.8) => {
+    g.font = fitted.font;
+    fitted.lines.forEach((l, i) => say(l, align === "center" ? x + w / 2 : x, y + fitted.size * asc + i * fitted.size * pitch, fitted.sx, align));
+    return y + fitted.size * asc + (fitted.lines.length - 1) * fitted.size * pitch;
+  };
+  const dateline = (T.short ? `${upper(T.place)}, ${T.short} —` : `${upper(T.place)} —`);
+
+  /* ---- uszy (ramki obok winiety): pogoda i wydanie — stały, prawdziwy tekst */
+  const y0 = 34 * u, earW = 150 * u, earH = 76 * u;
+  CLASSIC_EARS.forEach((ear, i) => {
+    const x = i === 0 ? m : W - m - earW;
+    g.lineWidth = 1.4 * u; g.strokeRect(x, y0, earW, earH);
+    const f = COND(15 * u, ear.title); g.font = f.font; say(ear.title, x + earW / 2, y0 + 21 * u, f.sx, "center");
+    g.font = SER(400, 9.4 * u);
+    ear.lines.forEach((l, k) => say(l, x + earW / 2, y0 + 37 * u + k * 11.6 * u, 1, "center"));
+  });
+
+  /* ---- winieta (nazwa gazety) między uszami: do 2 wierszy, zmniejszana */
+  const npW = cw - 2 * (earW + 22 * u);
+  // jeden wiersz, póki litery mają ≥ 46u; dłuższa nazwa — dwa wiersze, ale blok nie wyższy niż uszy
+  const npFace = (s) => ({ font: SER(700, s, T.masthead), sx: 1 });
+  let np = fit(T.masthead, { face: npFace, maxW: npW, maxLines: 1, max: 84 * u, min: 46 * u });
+  if (np.truncated) np = fit(T.masthead, { face: npFace, maxW: npW, maxLines: 2, max: (earH + 4 * u) / (0.68 + 0.98), min: 22 * u, balance: true });
+  let npBottom;
+  {
+    const pitch = 0.98, hBlock = np.size * (0.68 + (np.lines.length - 1) * pitch);
+    const top = y0 + (earH - hBlock) / 2 - 3 * u;
+    npBottom = block(np, m, top, cw, pitch, "center", 0.68) + np.size * 0.22; // + zejście liter (g, y, p)
+  }
+  const sloganY = Math.max(y0 + earH + 12 * u, npBottom + 10 * u);
+  g.font = SER(400, 8.6 * u);
+  say("AN INDEPENDENT NEWSPAPER  ·  ESTABLISHED 1871", W / 2, sloganY, 1, "center");
+  let y = sloganY + 8 * u;
+  rule(m, y, cw, 1.3 * u); y += 4.2 * u; rule(m, y, cw, 4 * u); y += 6 * u;
+  // linia numeru: tom i numer, miejsce i data, cena w centach
+  {
+    const fol = upper(`${T.place}, ${T.date}`), bl = y + 13 * u;
+    g.font = SER(400, 10.5 * u); say("VOL. LXXII — No. 214", m, bl);
+    say("THREE CENTS", W - m, bl, 1, "right");
+    const f = fit(fol, { face: (s) => ({ font: SER(400, s, fol), sx: 1 }), maxW: cw - 2 * 150 * u, maxLines: 1, max: 10.5 * u, min: 7 * u });
+    say(f.lines[0], W / 2, bl, 1, "center");
+  }
+  y += 19 * u; rule(m, y, cw, 1.3 * u); y += 12 * u;
+
+  /* ---- baner (EXTRA) farbą dodatkową, z liniami po bokach */
+  if (T.kicker) {
+    const kt = upper(T.kicker);
+    const k = fit(kt, { face: (s) => COND(s, kt), maxW: cw * 0.6, maxLines: 1, max: 38 * u, min: 16 * u });
+    g.fillStyle = spot;
+    const kw = width(k.lines[0]) * k.sx, base = y + k.size * 0.82;
+    say(k.lines[0], W / 2, base, k.sx, "center");
+    const mid = base - k.size * 0.36, gap = 18 * u;
+    rule(m, mid - 1.5 * u, (cw - kw) / 2 - gap, 3 * u); rule(W / 2 + kw / 2 + gap, mid - 1.5 * u, (cw - kw) / 2 - gap, 3 * u);
+    g.fillStyle = ink;
+    y = base + 12 * u;
+  }
+
+  /* ---- nagłówek główny: wąski grotesk wersalikami na całą szerokość, 1–2 wiersze */
+  const hlT = upper(T.headline);
+  const hl = fit(hlT, { face: (s) => COND(s, hlT), maxW: cw, maxLines: 2, max: 96 * u, min: 34 * u, balance: true });
+  y = block(hl, m, y, cw, 0.98, "center", 0.8) + hl.size * 0.24;
+
+  /* ---- podtytuł (deck): szeryf półgruby, wyśrodkowany, nad nim krótka linia */
+  rule(W / 2 - 60 * u, y + 2 * u, 120 * u, 1 * u);
+  const dk = fit(T.deck, { face: (s) => ({ font: SER(700, s, T.deck), sx: 1 }), maxW: cw * 0.86, maxLines: 3, max: 21 * u, min: 13 * u, balance: true });
+  y = block(dk, m, y + 8 * u, cw, 1.2, "center", 0.86) + dk.size * 0.5;
+  rule(m, y, cw, 1.3 * u); y += 14 * u;
+
+  /* ---- łam: 5 szpalt; zdjęcie na 4 szpalty (wyśrodkowane, gdy węższe), w 5. artykuł boczny */
   const cols = 5, gap = 18 * u, colW = (cw - gap * (cols - 1)) / cols;
   const colX = (i) => m + i * (colW + gap);
-  let pw = 4 * colW + 3 * gap, ph = pw / aspect;
-  const maxPh = 0.42 * W;
+  const lead = 12.7 * u;
+  const yLowerMax = Math.round(H * 0.79);
+  const capFit = fit(T.caption, { face: (s) => ({ font: SER(700, s, T.caption, true), sx: 1 }), maxW: 4 * colW + 3 * gap, maxLines: 2, max: 11.2 * u, min: 8.6 * u });
+  const capH = 12 * u + capFit.lines.length * capFit.size * 1.25;
+  const span4 = 4 * colW + 3 * gap;
+  let pw = span4, ph = pw / aspect;
+  // zdjęcie nie może zjeść szpalt pod sobą (≥ 5 wierszy tekstu nad dolnym artykułem)
+  const maxPh = Math.max(0.2 * W, Math.min(0.42 * W, yLowerMax - 14 * u - 5 * lead - capH - y));
   if (ph > maxPh) { ph = maxPh; pw = ph * aspect; }
-  const photoRect = { x: m, y, w: pw, h: ph };
+  const photoRect = { x: m + (span4 - pw) / 2, y, w: pw, h: ph };
   halftone(g, photo, photoRect, (lite ? 3.3 : 2.7) * cssScale, ink, data.paper);
-  g.lineWidth = 1 * u; g.strokeRect(m, y, pw, ph);
+  g.lineWidth = 1 * u; g.strokeRect(photoRect.x, y, pw, ph);
   const bodyTop = y;
-  // podpis pod zdjęciem + „fot.” wyrównane do prawej
-  let yc = lines(m, y + ph + 5 * u, pw, 2, 11.2 * u, F(400, 11.2 * u, true), 14 * u);
-  g.font = F(400, 8.4 * u); g.textAlign = "right"; g.fillText(words(r, 2).toUpperCase(), m + pw, yc + 11 * u); g.textAlign = "left";
-  yc += 22 * u;
-  const yLower = Math.round(H * 0.752);
-  // 5. kolumna: nadtytuł + linia + tekst
+  // podpis pod zdjęciem (edytowalny) + „STAFF PHOTO” do prawej
+  g.font = SER(400, 7.6 * u); say("STAFF PHOTO", photoRect.x + pw, y + ph + 9.5 * u, 1, "right");
+  let yc = block(capFit, photoRect.x, y + ph + 10 * u, pw, 1.25, "left", 0.9) + 11 * u;
+  const yLower = clamp(Math.round(yc + 8 * lead + 14 * u), Math.round(H * 0.70), yLowerMax);
+
+  // 5. szpalta: artykuł boczny (nagłówek 1 z listy)
   const k5 = colX(4);
-  let y5 = lines(k5, bodyTop - 4 * u, colW, 3, 18.5 * u, F(700, 18.5 * u), 20 * u);
-  y5 += 8 * u; rule(k5 + colW * 0.3, y5, colW * 0.4, 1 * u); y5 += 6 * u;
-  column(k5, y5, colW, yLower - 14 * u);
-  // kolumny 1–4 pod zdjęciem (pierwsza z inicjałem)
-  for (let i = 0; i < 4; i++) column(colX(i), yc, colW, yLower - 14 * u, { drop: i === 0 });
-  // linie między kolumnami
+  const s1 = upper(T.stories[0]);
+  const sh = fit(s1, { face: (s) => COND(s, s1), maxW: colW, maxLines: 4, max: 23 * u, min: 13 * u, balance: true });
+  let y5 = block(sh, k5, bodyTop - 2 * u, colW, 1.02, "center", 0.8) + 9 * u;
+  rule(k5 + colW * 0.3, y5, colW * 0.4, 1 * u); y5 += 6 * u;
+  const side = proseStream(r);
+  column(k5, y5, colW, yLower - 14 * u, { start: dateline, jump: "Continued on Page 4, Column 2", src: side });
+  // szpalty 1–4 pod zdjęciem: artykuł główny ciągnie się przez szpalty (bylina, dateline, „ciąg dalszy”)
+  g.font = SER(700, 8.4 * u); say("BY A STAFF CORRESPONDENT", colX(0) + colW / 2, yc + 8 * u, 1, "center");
+  for (let i = 0; i < 4; i++) {
+    const top = i === 0 ? yc + 14 * u : yc;
+    column(colX(i), top, colW, yLower - 14 * u, { start: i === 0 ? dateline : "", jump: i === 3 ? "Continued on Page 2, Column 3" : "" });
+  }
+  // linie między szpaltami
   g.globalAlpha = 0.55;
   for (let i = 1; i < cols; i++) {
-    const x = colX(i) - gap / 2 - 0.35 * u;
-    rule(x, i === 4 ? bodyTop : yc - 4 * u, 0.7 * u, (yLower - 10 * u) - (i === 4 ? bodyTop : yc - 4 * u));
+    const x = colX(i) - gap / 2 - 0.35 * u, top = i === 4 ? bodyTop : yc - 4 * u;
+    rule(x, top, 0.7 * u, (yLower - 10 * u) - top);
   }
   g.globalAlpha = 1;
 
-  /* ---- dół strony: drugi artykuł (kolumny 1–3) + ramka ogłoszenia (kolumny 4–5) */
+  /* ---- pod złożeniem: drugi artykuł (szpalty 1–3) + ramka „In Brief” (szpalty 4–5) */
   rule(m, yLower, cw, 1.3 * u); rule(m, yLower + 4 * u, cw, 1.3 * u);
   const yFoot = H - m - 6 * u;
   const w3 = 3 * colW + 2 * gap;
-  let yl = lines(m, yLower + 12 * u, w3, 2, 31 * u, F(700, 31 * u), 33 * u);
-  yl += 10 * u;
-  for (let i = 0; i < 3; i++) column(colX(i), yl, colW, yFoot - 18 * u, { subs: false, drop: i === 0 });
+  const s2 = upper(T.stories[1]);
+  const lh = fit(s2, { face: (s) => COND(s, s2), maxW: w3, maxLines: 2, max: 36 * u, min: 16 * u, balance: true });
+  let yl = block(lh, m, yLower + 12 * u, w3, 1.0, "center", 0.8) + 8 * u;
+  rule(m + w3 / 2 - 40 * u, yl, 80 * u, 1 * u); yl += 6 * u;
+  const lower = proseStream(r);
+  for (let i = 0; i < 3; i++) column(colX(i), yl, colW, yFoot - 18 * u, { start: i === 0 ? dateline : "", subs: false, src: lower, jump: i === 2 ? "Continued on Page 6, Column 1" : "" });
   g.globalAlpha = 0.55;
   for (let i = 1; i < 3; i++) rule(colX(i) - gap / 2 - 0.35 * u, yl - 2 * u, 0.7 * u, yFoot - 20 * u - yl);
   g.globalAlpha = 1;
-  // ogłoszenie: podwójna ramka, duże słowo, rysunek z kreskowania, drobny tekst, „cena”
+  // ramka: podwójna linia, „IN BRIEF”, krótkie wiadomości z nagłówkami 3–6 z listy
   const ax = colX(3), aw = 2 * colW + gap, ay = yLower + 14 * u, ah = yFoot - 18 * u - ay;
   g.lineWidth = 2.4 * u; g.strokeRect(ax, ay, aw, ah);
   g.lineWidth = 0.8 * u; g.strokeRect(ax + 6 * u, ay + 6 * u, aw - 12 * u, ah - 12 * u);
-  g.font = F(700, 30 * u); g.textAlign = "center";
-  g.fillText(word(r, 7).toUpperCase(), ax + aw / 2, ay + 44 * u);
-  const ccx = ax + aw / 2, ccy = ay + ah * 0.5, cr = Math.min(aw * 0.22, ah * 0.2);
-  g.save(); g.beginPath(); g.arc(ccx, ccy, cr, 0, Math.PI * 2); g.clip();
-  g.lineWidth = 1.1 * u;
-  for (let k = -cr * 2; k < cr * 2; k += 4.2 * u) { g.beginPath(); g.moveTo(ccx + k - cr, ccy - cr); g.lineTo(ccx + k + cr, ccy + cr); g.stroke(); }
-  g.restore();
-  g.lineWidth = 1.6 * u; g.beginPath(); g.arc(ccx, ccy, cr, 0, Math.PI * 2); g.stroke();
-  // blask (sierp w kolorze papieru) — kreskowana kula jak w drzeworycie reklamowym
-  g.beginPath(); g.arc(ccx - cr * 0.28, ccy - cr * 0.3, cr * 0.42, Math.PI * 0.95, Math.PI * 1.75); g.lineWidth = 5 * u; g.strokeStyle = data.paper; g.stroke();
-  g.strokeStyle = ink; g.lineWidth = 1 * u;
-  lines(ax + 18 * u, ccy + cr + 10 * u, aw - 36 * u, 2, 10 * u, F(400, 10 * u, true), 13 * u, "center");
-  g.font = F(700, 22 * u); g.textAlign = "center"; g.fillText(cap(word(r, 5)), ax + aw / 2, ay + ah - 18 * u); g.textAlign = "left";
-  // stopka
+  {
+    const f = COND(26 * u, "IN BRIEF"); g.font = f.font; say("IN BRIEF", ax + aw / 2, ay + 36 * u, f.sx, "center");
+    rule(ax + aw / 2 - 30 * u, ay + 45 * u, 60 * u, 1 * u);
+    const ix = ax + 18 * u, iw = aw - 36 * u, bottom = ay + ah - 14 * u;
+    let iy = ay + 56 * u;
+    const brief = proseStream(r);
+    for (let i = 2; i < 6; i++) {
+      const t = T.stories[i];
+      const bh = fit(t, { face: (s) => ({ font: SER(700, s, t), sx: 1 }), maxW: iw, maxLines: 2, max: 12.4 * u, min: 9.5 * u });
+      const need = bh.lines.length * bh.size * 1.15 + 2 * 11.4 * u + 8 * u;
+      if (iy + need > bottom) break;
+      iy = block(bh, ix, iy, iw, 1.15, "left", 0.86) + 4 * u;
+      iy = column(ix, iy, iw, Math.min(bottom, iy + 2.2 * 11.4 * u), { size: 9.2 * u, lead: 11.4 * u, subs: false, src: brief, sentence: true }) + 10 * u;
+      brief.breakPara();
+    }
+  }
+  // stopka: indeks wydania
   rule(m, yFoot - 6 * u, cw, 1 * u);
-  g.font = F(400, 9 * u); g.fillText(words(r, 2, true), m, yFoot + 6 * u);
-  g.textAlign = "right"; g.fillText(words(r, 3, true), W - m, yFoot + 6 * u); g.textAlign = "left";
+  {
+    const f = fit(CLASSIC_INDEX, { face: (s) => ({ font: SER(400, s), sx: 1 }), maxW: cw, maxLines: 1, max: 9 * u, min: 6 * u });
+    say(f.lines[0], W / 2, yFoot + 6 * u, 1, "center");
+  }
 
   paperFinish(g, W, H, u, r, data.paper, lite);
   return { canvas: c, photoRect, H };
 }
 
-/**
- * Raster gazetowy: zdjęcie w skali szarości jako kropki farby na siatce obróconej o 45°, pole kropki ∝ zaczernienie.
- * `cell` — skok siatki w px płótna strony.
- */
-/* ================================================================ strona współczesna (kolorowy dziennik / tabloid) */
-const sans = (fam) => `${fam ? `"${fam}", ` : ""}"Segoe UI", "Helvetica Neue", Arial, sans-serif`;
+/* ================================================================ strona współczesna (amerykański tabloid w kolorze) */
 const MODERN_PAPER = "#f6f5f1";
-/** Kolor z alfą z #rrggbb. */
-const rgba = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; };
+const MODERN_INSIDE = [["Weather", "A2"], ["Opinion", "A14"], ["Business", "B1"], ["Sports", "C1"], ["Puzzles", "D6"]];
+const MODERN_PAGES = [4, 6, 9, 15, 22];
 
 /**
- * Współczesna pierwsza strona w pełnym kolorze: blok winiety w kolorze akcentu z zajawkami (wycinki zrzutu), pasek działów,
- * etykieta „pilne” + wielki bezszeryfowy nagłówek, kolorowe zdjęcie na całą szerokość z belką podpisu, łam 3 kolumny
- * (tekst wyrównany do lewej, pogrubione wejście) + boczna kolumna z kolorowymi ramkami, rząd kart u dołu. Tekst udawany.
+ * Współczesna pierwsza strona w pełnym kolorze: flaga w kolorze akcentu z winietą i dwiema zapowiedziami (wycinki zrzutu
+ * + numer strony), pasek z datą i ceną, etykieta + ogromny ścieśniony nagłówek wersalikami, lead szeryfem, kolorowe zdjęcie
+ * z belką podpisu, 3 łamy (bylina, dateline, „ciąg dalszy”), boczne ramki, rząd kart. Każdy napis — prawdziwy tekst.
  */
-function paintModern({ W, photo, aspect, data, seed = 1, family = null, sansFamily = null, lite = false }) {
+export function paintModern({ W, photo, aspect, data, seed = 1, fonts = {}, lite = false, now = new Date() }) {
   const r = mulberry(seed ^ 0x9e3779b9);
+  const T = newspaperText(data, now);
   const u = W / 1000, H = Math.round(W * 1.42);
   const c = mk(W, H), g = c.getContext("2d");
-  const width = measurer(g);
+  const { width, say, fit, leadIn } = typesetter(g);
   const acc = data.accent, ink = "#141414", paper = MODERN_PAPER;
-  const S = (w, s) => `${w} ${s.toFixed(2)}px ${sans(sansFamily)}`;
-  const SE = (w, s, it = false) => `${it ? "italic " : ""}${w} ${s.toFixed(2)}px ${serif(family)}`;
+  const SANS = `${fonts.sans ? `"${fonts.sans}", ` : ""}${SANS_FALLBACK}`;
+  const S = (w, s) => `${w} ${s.toFixed(2)}px ${SANS}`;
+  const SE = (w, s, txt = "", it = false) => `${it ? "italic " : ""}${w} ${s.toFixed(2)}px ${fonts.serif && covered(txt) ? `"${fonts.serif}", ` : ""}${SERIF_FALLBACK}`;
+  /** Nagłówki „z drewna”: pogrubiony grotesk ścieśniony do 80 % (Signika ma polskie znaki). */
+  const WOOD = (s) => ({ font: S(700, s), sx: 0.8 });
+  const BOLD = (s) => ({ font: S(700, s), sx: 1 });
   g.fillStyle = paper; g.fillRect(0, 0, W, H);
   const m = 40 * u, cw = W - 2 * m;
   g.textBaseline = "alphabetic";
+  const stream = proseStream(r);
 
   /** Wycinek zrzutu (cover) w prostokącie — kolor, lekko podbity jak druk offsetowy. */
   const photoIn = (x, y, w, h, fx = 0.5, fy = 0.5, zoom = 1) => {
@@ -383,158 +656,170 @@ function paintModern({ W, photo, aspect, data, seed = 1, family = null, sansFami
     g.drawImage(photo, sx, sy, cw2, ch2, x, y, w, h);
     g.restore();
   };
-  /** Linie tekstu wyrównane do lewej (łam współczesny: bez justowania). */
-  const rag = (x, y, w, yEnd, { size = 10.4 * u, lead = 13.6 * u, color = ink, lead_in = true } = {}) => {
-    let base = y + size, first = lead_in;
+  /** Prozą do lewej (łam współczesny: bez justowania); `start` — wytłuszczony dateline, `jump` — „ciąg dalszy” na końcu. */
+  const rag = (x, y, w, yEnd, { size = 10.2 * u, lead = 13.4 * u, color = ink, start = "", jump = "", src = stream } = {}) => {
+    let base = y + size, first = true;
+    const end = jump ? yEnd - lead : yEnd;
     g.fillStyle = color;
-    while (base <= yEnd) {
-      const paraLines = 3 + Math.floor(r() * 6);
-      for (let i = 0; i < paraLines && base <= yEnd; i++) {
-        let cx = x;
-        if (first) {
-          // pogrubione wejście w tekst (2 słowa wersalikami)
-          g.font = S(700, size);
-          const t = `${word(r, 4).toUpperCase()} ${word(r, 5).toUpperCase()} `;
-          g.fillText(t, cx, base); cx += width(t); first = false;
-        }
-        g.font = S(400, size);
-        const target = i === paraLines - 1 ? w * (0.3 + r() * 0.5) : w * (0.82 + r() * 0.18);
-        let t = "";
-        for (;;) { const nx = t ? `${t} ${word(r)}` : word(r); if (cx - x + width(nx) > target) break; t = nx; }
-        g.fillText(t, cx, base);
-        base += lead;
+    g.font = S(400, size); const space = width(" ");
+    while (base <= end) {
+      let cx = x, avail = w;
+      if (first && start) {
+        g.font = S(700, size);
+        const lead0 = leadIn(start, x, base, w, space, lead);
+        base += lead0.lines * lead; cx += lead0.sw; avail -= lead0.sw; g.font = S(400, size);
       }
-      base += lead * 0.45;
+      const ws = []; let tw = 0, paraEnd = false;
+      for (;;) {
+        const nx = src.peek(), ww = width(nx.w), add = (ws.length ? space : 0) + ww;
+        if (ws.length && tw + add > avail) break;
+        src.next(); ws.push(nx.w); tw += add;
+        if (nx.end) { paraEnd = true; break; }
+        if (tw >= avail) break;
+      }
+      say(ws.join(" "), cx, base);
+      base += lead * (paraEnd ? 1.45 : 1); first = false;
     }
+    if (jump) { g.font = S(700, size * 0.9); g.fillStyle = acc; say(jump, x, Math.min(base, yEnd)); g.fillStyle = color; g.font = S(400, size); }
     return base;
   };
-  const lines = (x, y, w, n, font, lead, color = ink, align = "left") => {
-    g.font = font; g.fillStyle = color; g.textAlign = align;
-    for (let i = 0; i < n; i++) {
-      const target = i === n - 1 ? w * (0.45 + r() * 0.4) : w * (0.88 + r() * 0.1);
-      let t = cap(word(r));
-      for (;;) { const nx = `${t} ${word(r)}`; if (width(nx) > target) break; t = nx; }
-      g.fillText(t, align === "center" ? x + w / 2 : x, y + lead * (i + 0.8));
-    }
-    g.textAlign = "left";
-    return y + n * lead;
+  const block = (fitted, x, y, pitch, color = ink, asc = 0.82, align = "left", w = 0) => {
+    g.font = fitted.font; g.fillStyle = color;
+    fitted.lines.forEach((l, i) => say(l, align === "center" ? x + w / 2 : x, y + fitted.size * asc + i * fitted.size * pitch, fitted.sx, align));
+    return y + fitted.size * asc + (fitted.lines.length - 1) * fitted.size * pitch;
   };
 
-  /* ---- blok winiety: kolor akcentu, nazwa białą bezszeryfową, po prawej dwie zajawki z wycinkami zrzutu */
-  let y = m * 0.8;
-  const bandH = 128 * u;
+  /* ---- flaga: kolor akcentu, nazwa białym groteskiem, po prawej dwie zapowiedzi z numerem strony */
+  let y = 32 * u;
+  const bandH = 132 * u, teaseW = 182 * u, teaseGap = 10 * u, teasers = 2;
   g.fillStyle = acc; g.fillRect(m, y, cw, bandH);
-  const mast = data.masthead || `${cap(word(r, 5))} ${cap(word(r, 6))}`;
-  const teaseW = 150 * u, teaseGap = 10 * u, teasers = W > 0 ? 2 : 0;
-  const mastMax = cw - teasers * (teaseW + teaseGap) - 40 * u;
-  let ms = 84 * u;
-  g.font = S(700, ms);
-  while (width(mast) > mastMax && ms > 30 * u) { ms -= 2 * u; g.font = S(700, ms); }
-  g.fillStyle = "#ffffff";
-  g.fillText(mast, m + 22 * u, y + bandH * 0.5 + ms * 0.34);
-  g.font = S(600, 10.5 * u); g.fillStyle = "rgba(255,255,255,0.85)";
-  g.fillText(words(r, 4, true).toUpperCase(), m + 24 * u, y + bandH - 14 * u);
+  const mastW = cw - teasers * (teaseW + teaseGap) - 44 * u;
+  // jeden wiersz, póki litery mają ≥ 50u; dłuższa nazwa — dwa wiersze mieszczące się w wysokości flagi
+  const mFace = (s) => ({ font: S(700, s), sx: 0.92 });
+  let mf = fit(T.masthead, { face: mFace, maxW: mastW, maxLines: 1, max: 96 * u, min: 50 * u });
+  if (mf.truncated) mf = fit(T.masthead, { face: mFace, maxW: mastW, maxLines: 2, max: (bandH - 26 * u) / (0.72 + 0.94), min: 24 * u, balance: true });
+  {
+    const pitch = 0.94, hBlock = mf.size * (0.72 + (mf.lines.length - 1) * pitch);
+    block(mf, m + 22 * u, y + (bandH - hBlock) / 2 - 2 * u, pitch, "#ffffff", 0.72);
+  }
   for (let i = 0; i < teasers; i++) {
-    const tx = m + cw - (teasers - i) * (teaseW + teaseGap), ty = y + 12 * u, th = bandH - 24 * u;
+    const tx = m + cw - (teasers - i) * (teaseW + teaseGap) + teaseGap - 12 * u, ty = y + 12 * u, th = bandH - 24 * u;
     g.fillStyle = "rgba(255,255,255,0.14)"; g.fillRect(tx, ty, teaseW, th);
-    photoIn(tx + 6 * u, ty + 6 * u, teaseW * 0.42, th - 12 * u, 0.2 + 0.6 * r(), 0.3 + 0.4 * r(), 2.4);
-    lines(tx + teaseW * 0.42 + 12 * u, ty + 4 * u, teaseW * 0.55 - 16 * u, 3, S(700, 11 * u), 14 * u, "#ffffff");
+    const pwid = teaseW * 0.4;
+    photoIn(tx + 6 * u, ty + 6 * u, pwid, th - 12 * u, 0.2 + 0.6 * r(), 0.3 + 0.4 * r(), 2.4);
+    const lx = tx + pwid + 14 * u, lw = teaseW - pwid - 22 * u;
+    g.font = S(700, 8.6 * u); g.fillStyle = "rgba(255,255,255,0.82)"; say(`PAGE ${MODERN_PAGES[i]}`, lx, ty + 17 * u);
+    const tf = fit(T.stories[i], { face: BOLD, maxW: lw, maxLines: 4, max: 13.5 * u, min: 8.6 * u });
+    block(tf, lx, ty + 22 * u, 1.14, "#ffffff", 0.9);
   }
   y += bandH;
-  // pasek działów (ciemny)
-  g.fillStyle = "#1b1b1d"; g.fillRect(m, y, cw, 26 * u);
-  g.font = S(600, 10.5 * u); g.fillStyle = "rgba(255,255,255,0.9)";
-  let nx = m + 18 * u;
-  for (let i = 0; i < 7; i++) { const t = word(r, 4 + Math.floor(r() * 4)).toUpperCase(); if (nx + width(t) > m + cw - 18 * u) break; g.fillText(t, nx, y + 17.5 * u); nx += width(t) + 26 * u; }
-  y += 26 * u + 22 * u;
+  // pasek: data po amerykańsku, wydanie i cena w dolarach
+  g.fillStyle = "#1b1b1d"; g.fillRect(m, y, cw, 28 * u);
+  g.font = S(600, 10.5 * u); g.fillStyle = "rgba(255,255,255,0.92)";
+  say(upper(T.date), m + 18 * u, y + 18.5 * u);
+  say("LATE EDITION  ·  $2.00", m + cw - 18 * u, y + 18.5 * u, 1, "right");
+  y += 28 * u + 20 * u;
 
-  /* ---- etykieta + nagłówek (MG albo udawany) */
-  g.font = S(700, 13 * u);
-  const kick = word(r, 5).toUpperCase(), kw = width(kick) + 20 * u;
-  g.fillStyle = acc; g.fillRect(m, y, kw, 24 * u);
-  g.fillStyle = "#ffffff"; g.fillText(kick, m + 10 * u, y + 17 * u);
-  g.font = S(600, 13 * u); g.fillStyle = acc; g.fillText(cap(words(r, 3)), m + kw + 12 * u, y + 17 * u);
-  y += 34 * u;
-  let hs = 70 * u, hl;
-  const wrap = (text, font, w) => {
-    g.font = font; const out = []; let cur = "";
-    for (const wd of text.split(" ")) { const n2 = cur ? `${cur} ${wd}` : wd; if (cur && width(n2) > w) { out.push(cur); cur = wd; } else cur = n2; }
-    if (cur) out.push(cur); return out;
-  };
-  const htext = data.headline || `${cap(word(r, 6))} ${word(r, 3)} ${word(r, 7)} ${word(r, 4)} ${word(r, 6)}`;
-  hl = wrap(htext, S(700, hs), cw);
-  while ((hl.length > 2 || hl.some((l) => width(l) > cw)) && hs > 34 * u) { hs -= 2 * u; hl = wrap(htext, S(700, hs), cw); }
-  hl = hl.slice(0, 2);
-  g.font = S(700, hs); g.fillStyle = ink;
-  hl.forEach((l, i) => g.fillText(l, m - 2 * u, y + hs * 0.84 + i * hs * 0.98));
-  y += hs * 0.84 + (hl.length - 1) * hs * 0.98 + 16 * u;
-  // lead (serif, szary) — współczesne dzienniki łączą bezszeryfowe tytuły z szeryfowym leadem
-  y = lines(m, y, cw * 0.86, 2, SE(400, 17 * u), 22 * u, "#444") + 12 * u;
+  /* ---- etykieta + nagłówek „z drewna” + lead */
+  if (T.kicker) {
+    const kt = upper(T.kicker);
+    const kf = fit(kt, { face: BOLD, maxW: cw * 0.5, maxLines: 1, max: 13 * u, min: 9 * u });
+    const kw = width(kf.lines[0]) + 20 * u;
+    g.fillStyle = acc; g.fillRect(m, y, kw, 24 * u);
+    g.fillStyle = "#ffffff"; say(kf.lines[0], m + 10 * u, y + 17 * u);
+    g.font = S(600, 13 * u); g.fillStyle = acc; say("Developing story", m + kw + 12 * u, y + 17 * u);
+    y += 34 * u;
+  }
+  const hlT = upper(T.headline);
+  const hl = fit(hlT, { face: WOOD, maxW: cw, maxLines: 3, max: 118 * u, min: 38 * u });
+  y = block(hl, m - 2 * u, y, 0.93, ink, 0.8) + 18 * u;
+  const dk = fit(T.deck, { face: (s) => ({ font: SE(400, s, T.deck), sx: 1 }), maxW: cw * 0.9, maxLines: 2, max: 18 * u, min: 12 * u });
+  y = block(dk, m, y, 1.28, "#444444", 0.86) + dk.size * 0.9;
 
-  /* ---- zdjęcie w kolorze na całą szerokość + belka podpisu */
+  /* ---- zdjęcie w kolorze na całą szerokość + belka podpisu (edytowalny podpis) */
+  const yCards = H - m - 196 * u;
   let pw = cw, ph = pw / aspect;
-  const maxPh = 0.43 * W;
+  const maxPh = Math.max(0.22 * W, Math.min(0.43 * W, yCards - 24 * u - 190 * u - y));
   if (ph > maxPh) { ph = maxPh; pw = ph * aspect; }
   const photoRect = { x: m + (cw - pw) / 2, y, w: pw, h: ph };
   if (pw < cw - 2 * u) {
-    // węższe zdjęcie (wysoki ekran): pas na całą szerokość wypełniony rozmytą, przyciemnioną kopią — jak w portalach
+    // węższe zdjęcie (wysoki ekran / wysoki nagłówek): pas na całą szerokość wypełniony rozmytą, przyciemnioną kopią
     g.save(); g.beginPath(); g.rect(m, y, cw, ph); g.clip();
     g.filter = `blur(${(14 * u).toFixed(1)}px) brightness(0.55) saturate(1.2)`;
     g.drawImage(photo, m - 20 * u, y - 20 * u - (cw * photo.height / photo.width - ph) / 2, cw + 40 * u, (cw + 40 * u) * photo.height / photo.width);
     g.restore();
   }
   photoIn(photoRect.x, y, pw, ph);
-  // belka podpisu w dolnej części zdjęcia (półprzezroczysta czerń, akcent z lewej)
-  const capH = 30 * u;
-  g.fillStyle = "rgba(10,10,12,0.62)"; g.fillRect(photoRect.x, y + ph - capH, pw, capH);
-  g.fillStyle = acc; g.fillRect(photoRect.x, y + ph - capH, 6 * u, capH);
-  g.font = S(400, 11.5 * u); g.fillStyle = "#ffffff";
-  g.fillText(cap(words(r, 9)), photoRect.x + 16 * u, y + ph - capH / 2 + 4 * u);
+  {
+    const cf = fit(T.caption, { face: (s) => ({ font: S(400, s), sx: 1 }), maxW: cw - 40 * u, maxLines: 2, max: 11.5 * u, min: 8.8 * u });
+    const capH = 14 * u + cf.lines.length * cf.size * 1.3;
+    g.fillStyle = "rgba(10,10,12,0.66)"; g.fillRect(m, y + ph - capH, cw, capH);
+    g.fillStyle = acc; g.fillRect(m, y + ph - capH, 6 * u, capH);
+    block(cf, m + 18 * u, y + ph - capH + 6 * u, 1.3, "#ffffff", 1.0);
+  }
   y += ph + 20 * u;
 
-  /* ---- łam: 3 kolumny tekstu + boczna kolumna z ramkami */
+  /* ---- łam: 3 szpalty tekstu (artykuł główny) + boczna kolumna z ramkami */
   const railW = 0.28 * cw, gap = 20 * u;
   const colsW = cw - railW - gap, colW = (colsW - 2 * gap) / 3;
-  const yCards = H - m - 190 * u;
-  for (let i = 0; i < 3; i++) rag(m + i * (colW + gap), y, colW, yCards - 24 * u, { lead_in: i === 0 });
+  const dl = `${upper(T.place)} —`;
+  g.font = S(700, 9 * u); g.fillStyle = acc; say("BY STAFF REPORTERS", m, y + 9 * u);
+  for (let i = 0; i < 3; i++) rag(m + i * (colW + gap), i === 0 ? y + 16 * u : y, colW, yCards - 24 * u, { start: i === 0 ? dl : "", jump: i === 2 ? "Continued on Page A4" : "" });
   g.fillStyle = "rgba(0,0,0,0.12)";
   for (let i = 1; i < 3; i++) g.fillRect(m + i * (colW + gap) - gap / 2, y, 1 * u, yCards - 24 * u - y);
-  // boczna kolumna: ramka w kolorze akcentu (jasna) + żółta ramka „w liczbach”
+  // ramka 1 (jasny akcent): nagłówek 3 z listy + tekst
   const rx = m + cw - railW;
   let ry = y;
-  const box1H = (yCards - 24 * u - y) * 0.52;
+  const box1H = (yCards - 24 * u - y) * 0.56;
   g.fillStyle = rgba(acc, 0.1); g.fillRect(rx, ry, railW, box1H);
   g.fillStyle = acc; g.fillRect(rx, ry, railW, 5 * u);
-  let by = lines(rx + 14 * u, ry + 14 * u, railW - 28 * u, 3, S(700, 17 * u), 21 * u);
-  rag(rx + 14 * u, by + 6 * u, railW - 28 * u, ry + box1H - 14 * u, { size: 9.8 * u, lead: 12.8 * u, lead_in: false });
+  const bf = fit(T.stories[2], { face: BOLD, maxW: railW - 28 * u, maxLines: 4, max: 18 * u, min: 11 * u });
+  const by = block(bf, rx + 14 * u, ry + 14 * u, 1.14, ink, 0.86);
+  rag(rx + 14 * u, by + 8 * u, railW - 28 * u, ry + box1H - 12 * u, { size: 9.6 * u, lead: 12.6 * u, src: proseStream(r), jump: `Story, Page ${MODERN_PAGES[1] + 1}` });
   ry += box1H + 16 * u;
+  // ramka 2 (żółta): spis działów ze stronami
   const box2H = yCards - 24 * u - ry;
   if (box2H > 60 * u) {
     g.fillStyle = "#ffd23f"; g.fillRect(rx, ry, railW, box2H);
-    g.font = S(700, 40 * u); g.fillStyle = ink;
-    g.fillText(word(r, 3).toUpperCase(), rx + 14 * u, ry + 52 * u);
-    lines(rx + 14 * u, ry + 62 * u, railW - 28 * u, Math.max(1, Math.min(4, Math.floor((box2H - 72 * u) / (15 * u)))), S(600, 11.5 * u), 15 * u);
+    g.font = S(700, 22 * u); g.fillStyle = ink; say("INSIDE", rx + 14 * u, ry + 30 * u);
+    const rowH = 17 * u, rows = Math.max(0, Math.min(MODERN_INSIDE.length, Math.floor((box2H - 44 * u) / rowH)));
+    for (let i = 0; i < rows; i++) {
+      const [name, page] = MODERN_INSIDE[i], yy = ry + 52 * u + i * rowH;
+      g.font = S(600, 12 * u); say(name, rx + 14 * u, yy);
+      g.font = S(700, 12 * u); say(page, rx + railW - 14 * u, yy, 1, "right");
+      g.fillStyle = "rgba(0,0,0,0.18)"; g.fillRect(rx + 14 * u, yy + 5 * u, railW - 28 * u, 0.8 * u); g.fillStyle = ink;
+    }
   }
 
-  /* ---- rząd kart u dołu: wycinek zrzutu + tytuł */
+  /* ---- rząd kart u dołu: wycinek zrzutu + nagłówek 4–6 z listy + numer strony */
   g.fillStyle = ink; g.fillRect(m, yCards, cw, 3 * u);
-  g.font = S(700, 12 * u); g.fillStyle = acc; g.fillText(word(r, 6).toUpperCase(), m, yCards + 22 * u);
+  g.font = S(700, 12 * u); g.fillStyle = acc; say("MORE TOP STORIES", m, yCards + 22 * u);
   const cards = 3, cgap = 18 * u, cwid = (cw - cgap * (cards - 1)) / cards, cy = yCards + 34 * u, cimg = 82 * u;
   for (let i = 0; i < cards; i++) {
     const cx = m + i * (cwid + cgap);
     photoIn(cx, cy, cwid, cimg, 0.15 + 0.7 * r(), 0.2 + 0.6 * r(), 2 + r() * 1.5);
-    lines(cx, cy + cimg + 4 * u, cwid, 2, S(700, 13 * u), 16 * u);
+    const cf = fit(T.stories[3 + i], { face: BOLD, maxW: cwid, maxLines: 2, max: 14 * u, min: 9.5 * u });
+    const yy = block(cf, cx, cy + cimg + 4 * u, 1.14, ink, 0.95);
+    g.font = S(600, 9 * u); g.fillStyle = "#666666"; say(`Page ${MODERN_PAGES[2 + i]}`, cx, yy + 14 * u);
   }
   // stopka
   g.fillStyle = "rgba(0,0,0,0.25)"; g.fillRect(m, H - m + 2 * u, cw, 1 * u);
-  g.font = S(400, 9 * u); g.fillStyle = "#555";
-  g.fillText(words(r, 3, true), m, H - m + 16 * u);
-  g.textAlign = "right"; g.fillText(words(r, 2, true), W - m, H - m + 16 * u); g.textAlign = "left";
+  g.fillStyle = "#555555";
+  {
+    // prawy dolny róg zajmuje zagięty róg strony — stopka w jednym wierszu od lewej
+    const foot = `© ${T.year} ${T.masthead}. All rights reserved.  ·  Printed in the U.S.A.`;
+    const ff = fit(foot, { face: (s) => ({ font: S(400, s), sx: 1 }), maxW: cw * 0.8, maxLines: 1, max: 9 * u, min: 6 * u });
+    say(ff.lines[0], m, H - m + 16 * u);
+  }
 
   paperFinish(g, W, H, u, r, paper, lite, false);
   return { canvas: c, photoRect, H };
 }
 
+/**
+ * Raster gazetowy: zdjęcie w skali szarości jako kropki farby na siatce obróconej o 45°, pole kropki ∝ zaczernienie.
+ * `cell` — skok siatki w px płótna strony.
+ */
 function halftone(g, src, rect, cell, ink, paper) {
   const sw = Math.max(8, Math.round(rect.w / (cell * 0.5))), sh = Math.max(8, Math.round((sw * rect.h) / rect.w));
   const sc = mk(sw, sh), sg = sc.getContext("2d", { willReadFrequently: true });
@@ -659,7 +944,7 @@ const ABS = "position:absolute;left:0;top:0;width:100%;height:100%;display:block
  * dokładnie tego, co było na ekranie, a `crop` = prostokąt zdjęcia w px ekranu (może wystawać poza ekran). Zasłona zaczyna
  * się od `cover`, a kamera najeżdża na `crop` i przenika w czyste zdjęcie (faza „najazd”, PUSH_MS) — bez skoku.
  */
-export function createNewspaper({ host = document.body, photo, cover = null, crop = null, coverBg = "#000", data, reduced = prefersReducedMotion(), lite = false, safe = null, seed = (Math.random() * 2 ** 32) >>> 0, family = null, sansFamily = null } = {}) {
+export function createNewspaper({ host = document.body, photo, cover = null, crop = null, coverBg = "#000", data, reduced = prefersReducedMotion(), lite = false, safe = null, seed = (Math.random() * 2 ** 32) >>> 0, family = null, sansFamily = null, condFamily = null } = {}) {
   const d = sanitizeNewspaper(data);
   const modern = d.style === "modern";
   const dir = d.direction === "ccw" ? -1 : 1;
@@ -689,8 +974,11 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
   };
 
   const ready = (async () => {
-    if (family) await ensurePaperFont(family, 1200);
-    if (modern && sansFamily) await ensurePaperFont(sansFamily, 1200);
+    // kroje ładowane równolegle; niezaładowany (limit czasu) = null → krój systemowy zamiast metryk fallbacku pod obcą nazwą
+    const [fSerif, fSans, fCond] = await Promise.all([
+      ensurePaperFont(family, 1200), ensurePaperFont(sansFamily, 1200), modern ? false : ensurePaperFont(condFamily, 1200),
+    ]);
+    const fonts = { serif: fSerif ? family : null, sans: fSans ? sansFamily : null, cond: fCond ? condFamily : null };
     await frame();
     if (closed) return false;
     const t0 = performance.now();
@@ -704,8 +992,8 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
     const W = Math.round(Math.min(2200, restW * res));
     // cssScale = px płótna strony na 1 px CSS w spoczynku (skok rastra liczony w px ekranu)
     const page = modern
-      ? paintModern({ W, photo, aspect: photo.width / photo.height, data: d, seed, family, sansFamily, lite })
-      : paintPage({ W, photo, aspect: photo.width / photo.height, data: d, seed, family, lite, cssScale: W / restW });
+      ? paintModern({ W, photo, aspect: photo.width / photo.height, data: d, seed, fonts, lite })
+      : paintPage({ W, photo, aspect: photo.width / photo.height, data: d, seed, fonts, lite, cssScale: W / restW });
     stats.pageW = W; stats.buildMs = Math.round(performance.now() - t0);
 
     // tło: stara scena mocno rozmyta i przyciemniona (głębia ostrości), statyczne

@@ -2,7 +2,7 @@
 import { LIGHT_HINT_KINDS } from "../vendor/reveal-core.js";
 import { MODULE_ID, defaultConfig, deepMerge, sanitizeConfig } from "./config.mjs";
 import { sanitizeTicker } from "./fx/ticker.mjs";
-import { sanitizeNewspaper } from "./fx/newspaper.mjs";
+import { applyNewspaperOverride, sanitizeNewspaper } from "./fx/newspaper.mjs";
 
 const SAMPLES = `modules/${MODULE_ID}/samples`;
 
@@ -25,9 +25,10 @@ export const BUILTIN_PRESETS = [
       { id: "n4", label: "Pogoda", text: "Nad Marchiami Północnymi zbiera się burza — żeglarze zostają w portach" },
     ] }) },
   { id: "builtin-gazeta", name: "Wirująca gazeta (przykład)", kind: "newspaper", builtin: true, sketch: "", painted: "",
-    newspaper: sanitizeNewspaper({ masthead: "Kurier Wieczorny", headline: "", spinSec: 2.4, turns: 3, direction: "cw" }) },
+    // teksty puste = domyślne amerykańskie teksty wyglądu („The Harbor City Clarion”, EXTRA…), MG wpisuje własne w edytorze
+    newspaper: sanitizeNewspaper({ style: "classic", spinSec: 2.4, turns: 3, direction: "cw" }) },
   { id: "builtin-tabloid", name: "Wirujący tabloid (przykład)", kind: "newspaper", builtin: true, sketch: "", painted: "",
-    newspaper: sanitizeNewspaper({ style: "modern", masthead: "EXPRESS", headline: "", accent: "#d0121b", spinSec: 2.2, turns: 3, direction: "ccw" }) },
+    newspaper: sanitizeNewspaper({ style: "modern", accent: "#d0121b", spinSec: 2.2, turns: 3, direction: "ccw" }) },
 ];
 
 export const PRESET_KINDS = ["splash", "transition", "ticker", "newspaper"];
@@ -135,13 +136,16 @@ export function resolveScene(scene) {
   return { preset, hints: hintsFit ? preset.hints : null, hintsStrict: hintsFit ? !!preset.hintsStrict : false, sketchUrl, paintedUrl, config, trigger: f.trigger === "view" ? "view" : "activate", name: preset.name };
 }
 
-/** Scena z presetem „gazeta”: { preset, newspaper, trigger, name } albo null. */
+/**
+ * Scena z presetem „gazeta”: { preset, newspaper, trigger, name } albo null. Teksty strony z flag sceny
+ * (`flags.sketch-reveal.newspaper` — winieta, nagłówki, podpis…) nadpisują preset; puste pole = tekst presetu.
+ */
 export function resolveNewspaper(scene) {
   const f = sceneFlags(scene);
   if (!f.enabled || !f.presetId) return null;
   const preset = getPreset(f.presetId);
   if (!isNewspaper(preset)) return null;
-  return { preset, newspaper: sanitizeNewspaper(preset.newspaper), trigger: f.trigger === "view" ? "view" : "activate", name: preset.name };
+  return { preset, newspaper: applyNewspaperOverride(preset.newspaper, f.newspaper), trigger: f.trigger === "view" ? "view" : "activate", name: preset.name };
 }
 
 export { defaultConfig };

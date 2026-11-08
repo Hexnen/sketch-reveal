@@ -45,6 +45,33 @@ Podgląd silnika bez Foundry: `tools/harness-ticker.html?auto` przez serwer stat
 (parametry: `look=wire|signal|broadcast`, `hud=1` — atrapy dolnych HUD-ów innych modułów, `style=crawl`, `mode=once`, `reduced=1`, `lite=1`, `light=1`, `ui=0`, `min`,
 `slow=5` — zwolnione tempo, `lang=en`; panel zawiera prawdziwy edytor listy z `ticker-form.mjs`).
 
+## Wirująca gazeta (przejście sceny)
+
+Preset rodzaju „gazeta” zamienia widok każdego gracza w zdjęcie na pierwszej stronie amerykańskiej gazety; strona
+wiruje, odlatuje, a spod niej wyłania się nowa scena. Dwa wyglądy:
+
+- **Klasyczny dziennik z USA (lata 30.–40.)** — szeryfowa winieta między ramkami pogody i wydania, linia numeru
+  z datą i ceną w centach, baner EXTRA farbą akcentu, wąski grotesk wersalikami w nagłówkach, rastrowe zdjęcie,
+  5 łamów z liniami, bylina, dateline („HARBOR CITY, Nov. 8 —”), „Continued on Page 4”, ramka „In Brief”, indeks.
+- **Współczesny tabloid z USA** — kolorowa flaga z winietą i zapowiedziami stron, data po amerykańsku i cena w $,
+  etykieta + ogromny ścieśniony nagłówek, kolorowe zdjęcie z belką podpisu, 3 łamy, ramki boczne, karty „More top stories”.
+
+Nazwy są zmyślone (domyślnie „The Harbor City Clarion” i „Metro Flash”). Każdy czytelny tekst to prawdziwy angielski:
+w edytorze presetu sekcja **Pierwsza strona** to szkic pisany wprost (winieta, miejsce, data, baner, nagłówek,
+podtytuł, podpis zdjęcia i 6 pozostałych nagłówków — rubryka z lewej mówi, gdzie stanie wiersz). Pusty wiersz drukuje
+szary tekst domyślny; pusty baner = bez banera; pusta data = dzisiejsza. Łamy wypełnia neutralna proza agencyjna
+(prawdziwe zdania, nic nie zdradzają). Długie nagłówki same się zmniejszają, zawijają i — w ostateczności — skracają
+z wielokropkiem. Tekst z polskimi znakami drukuje się krojem zastępczym (Georgia / Signika), bo Amiri i Modesto
+Condensed z rdzenia Foundry ich nie mają.
+
+W zakładce sceny **Reveal**, gdy wybrany jest preset-gazeta, sekcja **Pierwsza strona tej sceny** nadpisuje teksty
+presetu dla tej jednej sceny (pole puste = tekst presetu, pokazany na szaro); wygląd, kolory i obrót są zawsze
+z presetu. Przycisk podglądu uwzględnia niezapisane zmiany.
+
+Test bez Foundry: `tools/harness-newspaper.html` (zestawy tekstów: domyślne, długie, jednowyrazowe, polskie;
+„strona w 1:1” pokazuje samą stronę do czytania). Kopie Modesto Condensed w `tools/fonts` są tylko lokalne
+(licencja Fontspring, w `.gitignore`).
+
 ## Media Optimizer (opcjonalnie)
 Z modułem [Media Optimizer (Local)](https://github.com/Hexnen/local-media-optimizer) edytor presetu ma przycisk **Zoptymalizuj obrazy**:
 kopie szkicu i malunku jako WebP ≤ 4096 px (szkic q0,95, malunek q0,88) trafiają do `worlds/<świat>/sketch-reveal/images/`,

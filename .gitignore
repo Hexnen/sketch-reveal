@@ -1,2 +1,5 @@
 node_modules/
 *.log
+# Modesto Condensed (rdzeń Foundry, licencja Fontspring: bez redystrybucji) — lokalna kopia tylko dla harnessu
+tools/fonts/modesto-condensed*.woff2
+tools/fonts/LICENSE-modesto-condensed.txt
