@@ -50,11 +50,13 @@ Podgląd silnika bez Foundry: `tools/harness-ticker.html?auto` przez serwer stat
 Preset rodzaju „gazeta” zamienia widok każdego gracza w zdjęcie na pierwszej stronie amerykańskiej gazety; strona
 wiruje, odlatuje, a spod niej wyłania się nowa scena. Dwa wyglądy:
 
-- **Klasyczny dziennik z USA (lata 30.–40.)** — szeryfowa winieta między ramkami pogody i wydania, linia numeru
-  z datą i ceną w centach, baner EXTRA farbą akcentu, wąski grotesk wersalikami w nagłówkach, rastrowe zdjęcie,
-  5 łamów z liniami, bylina, dateline („HARBOR CITY, Nov. 8 —”), „Continued on Page 4”, ramka „In Brief”, indeks.
+- **Klasyczny dziennik z USA (lata 30.–40.)** — duża, pogrubiona szeryfowa winieta („The” małym stopniem) między
+  ramkami pogody i wydania, linia numeru z datą i ceną w centach, baner EXTRA farbą akcentu, wąski grotesk wersalikami
+  w nagłówkach (krótki nagłówek jednym wierszem, w stopniu wydania nadzwyczajnego), rastrowe zdjęcie (tony wyrównane
+  dla ciemnych i jasnych map), 5 łamów z liniami, bylina, dateline („HARBOR CITY, Nov. 8 —”), „Continued on Page 4”,
+  jednoszpaltowe zbliżenie w rastrze w dolnym artykule, ramka „In Brief” z tabelką pływów, indeks.
 - **Współczesny tabloid z USA** — kolorowa flaga z winietą i zapowiedziami stron, data po amerykańsku i cena w $,
-  etykieta + ogromny ścieśniony nagłówek, kolorowe zdjęcie z belką podpisu, 3 łamy, ramki boczne, karty „More top stories”.
+  etykieta + ogromny ścieśniony nagłówek (krótki wypełnia szerokość), kolorowe zdjęcie z belką podpisu, 3 łamy, ramki boczne, karty „More top stories”.
 
 Nazwy są zmyślone (domyślnie „The Harbor City Clarion” i „Metro Flash”). Każdy czytelny tekst to prawdziwy angielski:
 w edytorze presetu sekcja **Pierwsza strona** to szkic pisany wprost (winieta, miejsce, data, baner, nagłówek,
