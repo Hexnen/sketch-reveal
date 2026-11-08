@@ -70,8 +70,31 @@ W zakładce sceny **Reveal**, gdy wybrany jest preset-gazeta, sekcja **Pierwsza 
 presetu dla tej jednej sceny (pole puste = tekst presetu, pokazany na szaro); wygląd, kolory i obrót są zawsze
 z presetu. Przycisk podglądu uwzględnia niezapisane zmiany.
 
+**Fotograf: sesja zdjęciowa (tryb multi)** — opcja presetu (pole „Fotograf”; zakładka sceny może ją nadpisać,
+puste = jak w presecie). Zanim strona się uformuje, fotograf prasowy robi serię zdjęć: migawka (dwie czarne zasłony
+na 25–80 ms), błysk lampy, krótkie dojście kadru, a na końcu zdjęcie całej sceny, które staje się zdjęciem głównym.
+Zdjęcia robi każdy klient sam, z tego, co sam widzi:
+
+- tokeny widoczne dla tego klienta (`Token#visible` z rdzenia: wizja, mgła, poziomy) łączą się w grupy po bliskości
+  (odstęp ≤ 2,5 pola = jedna grupa); grup jest najwyżej tyle, ile miejsc na stronie (klasyczna 2, współczesna 4),
+  od najliczniejszej; za dużo grup → łączą się dalej sąsiednie (≤ 3,75 pola), a gdy wyszedłby z tego kadr na całą
+  scenę — zostają najliczniejsze;
+- tokeny ukryte (`hidden`) nie trafiają na zdjęcia nawet u MG (na czas renderów zdjęć są chowane), tak samo podglądy
+  przeciągania i tokeny przezroczyste;
+- kadr grupy: margines ≥ 0,6 pola, szerokość ≥ 4,5 pola i ≥ połowa rozdzielczości zdjęcia (tekstura mapy powiększona
+  najwyżej ~2×), proporcje ekranu, grupa w części ekranu wolnej od UI, zawsze w całości wewnątrz mapy (bez tła sceny);
+- bez widocznych tokenów fotograf bierze 2 najbardziej szczegółowe fragmenty zdjęcia sceny (energia krawędzi);
+- zdjęcia mają ≤ 1280 px szerokości; czas każdego renderu: `newspaper.debug().shots[].ms` w API modułu.
+
+Na stronie: klasyczna — zdjęcie w bocznej szpalcie („Another view of the scene.”) i zdjęcie dolnego artykułu (dwuszpaltowe,
+gdy jest miejsce, inaczej jednoszpaltowe); współczesna — zapowiedzi stron w winiecie i karty „More top stories”. Zdjęcie
+trafia do miejsca o najbliższych proporcjach; puste miejsca dostają wycinek zdjęcia sceny jak w trybie jednego zdjęcia.
+Sesja trwa 160 ms + n × 440 ms (n ≤ 2) albo n × 360 ms (n > 2) + 380 ms; przy ograniczonym ruchu są to spokojne
+przenikania bez migawki i błysku (120 ms + n × 400 ms + 260 ms). Tryb jednego zdjęcia (domyślny) działa jak dotąd.
+
 Test bez Foundry: `tools/harness-newspaper.html` (zestawy tekstów: domyślne, długie, jednowyrazowe, polskie;
-„strona w 1:1” pokazuje samą stronę do czytania). Kopie Modesto Condensed w `tools/fonts` są tylko lokalne
+„strona w 1:1” pokazuje samą stronę do czytania; „fotograf” — multi z atrapami tokenów: 4 grupy, samotny token
+i ukryty, albo multi bez tokenów; parametry `shots=multi|none`, `style=modern`, `reduced`, `pad`). Kopie Modesto Condensed w `tools/fonts` są tylko lokalne
 (licencja Fontspring, w `.gitignore`).
 
 ## Media Optimizer (opcjonalnie)

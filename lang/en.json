@@ -333,5 +333,11 @@
   "SKETCHREVEAL.PaperStyle.classic": "Classic US broadsheet (1930s–40s)",
   "SKETCHREVEAL.PaperStyle.modern": "Modern US tabloid (full colour)",
   "SKETCHREVEAL.Hint.PaperStyle": "Classic: a big-city daily with weather ears, an EXTRA banner, a halftone photo and narrow columns on yellowed paper. Modern: a full-colour tabloid with a colour flag, page teasers, a huge headline and a colour photo.",
-  "SKETCHREVEAL.Hint.PaperAccent": "Classic: spot colour of the banner. Modern: colour of the flag, labels and frames."
+  "SKETCHREVEAL.Hint.PaperAccent": "Classic: spot colour of the banner. Modern: colour of the flag, labels and frames.",
+  "SKETCHREVEAL.Field.Shots": "Photographer",
+  "SKETCHREVEAL.Shots.single": "One photo",
+  "SKETCHREVEAL.Shots.multi": "Photo session (scene + token groups)",
+  "SKETCHREVEAL.Hint.Shots": "Photo session: before the page forms, a press photographer snaps the groups of tokens each player can see (tokens standing close together make one photo), then the whole scene. The scene becomes the lead photo and the groups fill the other pictures on the page. Hidden tokens and tokens a player cannot see never appear in that player's photos. With no visible tokens the photographer picks the most detailed parts of the map.",
+  "SKETCHREVEAL.Hint.SceneShots": "Empty = as in the preset.",
+  "SKETCHREVEAL.Shots.AsPreset": "As in the preset: {mode}"
 }

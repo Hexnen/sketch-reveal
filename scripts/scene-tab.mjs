@@ -30,7 +30,7 @@ function tabHtml(scene, active) {
   const npPh = sceneDraftPlaceholders(isNewspaper(npPreset) ? npPreset.newspaper : null);
   const npDraft = newspaperDraftHtml({
     prefix: `${F}.newspaper`, values: f.newspaper && typeof f.newspaper === "object" ? storyValues(f.newspaper) : {}, ph: npPh.ph, style: npPh.style,
-    kickerPh: npPh.kickerPh, accent: npPh.accent, legend: T("NewsDraft.SceneLegend"), hint: T("NewsDraft.SceneHint"),
+    kickerPh: npPh.kickerPh, accent: npPh.accent, legend: T("NewsDraft.SceneLegend"), hint: T("NewsDraft.SceneHint"), shotsLabel: npPh.shotsLabel,
     extra: isNewspaper(npPreset) ? "" : " hidden",
   });
   return `<div class="tab scrollable sketch-reveal-tab${active ? " active" : ""}" data-group="sheet" data-tab="${TAB}">

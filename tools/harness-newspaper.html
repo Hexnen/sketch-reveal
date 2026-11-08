@@ -83,18 +83,20 @@ body.clean #panel{display:none}
     <label>obroty <input id="turns" type="number" value="3" min="1" max="6" step="1" style="width:44px"></label>
     <label>kierunek <select id="direction"><option value="cw">zgodnie</option><option value="ccw">przeciwnie</option></select></label>
     <label>ziarno <input id="seed" type="number" value="7" style="width:70px"></label>
+    <label title="multi: tokeny = 3 grupy + samotny + ukryty (półprzezroczysty, widok MG — nie może trafić na zdjęcie)">fotograf <select id="shots"><option value="single">jedno zdjęcie</option><option value="multi">multi (tokeny)</option><option value="none">multi bez tokenów</option></select></label>
   </div>
   <div id="log" class="more"></div>
 </div>
 <script type="module">
-import { createNewspaper, paintPage, paintModern, sanitizeNewspaper, HOLD_MS, PRESS_MS, PUSH_MS, photoCrop, sameRect, coverView, cameraEase, revealCameraMs, REVEAL_ZOOM } from "../scripts/fx/newspaper.mjs";
+import { createNewspaper, paintPage, paintModern, sanitizeNewspaper, HOLD_MS, PRESS_MS, PUSH_MS, photoCrop, sameRect, coverView, cameraEase, revealCameraMs, REVEAL_ZOOM,
+  SHOT_CAP, clusterRects, shotFrame, detailSpots, shootMs } from "../scripts/fx/newspaper.mjs";
 const $ = (id) => document.getElementById(id);
 const log = (m) => { $("log").textContent = m; console.log("[newspaper]", m); };
 const img = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
 const data = () => sanitizeNewspaper({ style: $("style").value, accent: $("accent").value, paper: $("paper").value,
   masthead: $("masthead").value, kicker: $("kicker").value, headline: $("headline").value, deck: $("deck").value, caption: $("caption").value,
   place: $("place").value, date: $("date").value, stories: $("stories").value,
-  spinSec: +$("spinSec").value, turns: +$("turns").value, direction: $("direction").value });
+  spinSec: +$("spinSec").value, turns: +$("turns").value, direction: $("direction").value, shots: $("shots").value === "single" ? "single" : "multi" });
 /** Zestawy tekstów do testu dopasowania: puste (domyślne), krótkie własne, skrajnie długie, jednowyrazowe, polskie znaki. */
 const TEXTS = {
   default: { masthead: "", kicker: "Extra", headline: "", deck: "", caption: "", place: "", date: "", stories: "" },
@@ -108,8 +110,8 @@ const TEXTS = {
 const setTexts = (k) => { for (const [f, v] of Object.entries(TEXTS[k])) $(f).value = v.replaceAll("\\n", "\n"); };
 /** Sama strona w rozdzielczości 1:1 (do czytania tekstu): px płótna = px ekranu, przewijana. */
 function pageView(W = 1100) {
-  const { photo } = capture(), d = data();
-  const page = (d.style === "modern" ? paintModern : paintPage)({ W, photo, aspect: photo.width / photo.height, data: d, seed: +$("seed").value,
+  const { photo, shots } = capture(), d = data();
+  const page = (d.style === "modern" ? paintModern : paintPage)({ W, photo, aspect: photo.width / photo.height, data: d, seed: +$("seed").value, shots,
     fonts: { serif: "Amiri", sans: "Signika", cond: "Modesto Condensed" } });
   const sh = $("sheet"); sh.replaceChildren(page.canvas); sh.classList.add("on");
   return { W, H: page.H, photoRect: page.photoRect };
@@ -131,15 +133,39 @@ function sceneRect(i, padded, fx = 0.46, fy = 0.54) {
   const w = W * 0.4, h = (w * i.naturalHeight) / i.naturalWidth;
   return { x: W * fx - w / 2, y: H * fy - h / 2, w, h };
 }
-/** Narysuj scenę (tło + mapa + siatka sceny) kamerą view = {x, y (lewy górny róg w świecie), k (px płótna na jedn. świata)}. */
-function drawScene(g, cw, ch, i, rect, view, bg) {
+/* Atrapy tokenów (jak w Foundry: kwadrat siatki, obraz w ramce). Pozycja = punkt mapy (fx, fy) + przesunięcie w polach siatki.
+   Trzy grupy, samotny token i jeden UKRYTY (MG widzi go półprzezroczystego; nie może trafić na żadne zdjęcie). */
+const TOKENS = [
+  { n: "A", c: "#b8322a", fx: 0.30, fy: 0.42, dx: 0, dy: 0 }, { n: "B", c: "#2a6bb8", fx: 0.30, fy: 0.42, dx: 1.2, dy: 0.3 }, { n: "C", c: "#2f9a52", fx: 0.30, fy: 0.42, dx: 0.4, dy: 1.3 },
+  { n: "D", c: "#8e44ad", fx: 0.68, fy: 0.66, dx: 0, dy: 0 }, { n: "E", c: "#d68910", fx: 0.68, fy: 0.66, dx: 1.5, dy: -0.4 },
+  { n: "F", c: "#16a085", fx: 0.56, fy: 0.12, dx: 0, dy: 0 },
+  { n: "G", c: "#c0392b", fx: 0.84, fy: 0.30, dx: 0, dy: 0 }, { n: "K", c: "#7f8c8d", fx: 0.84, fy: 0.30, dx: 1.1, dy: 0.2 },
+  { n: "H", c: "#444", fx: 0.12, fy: 0.75, dx: 0, dy: 0, hidden: true },
+];
+const gridSize = () => ($("pad").checked ? 30 : 70);
+const tokenRects = (rect) => (($("shots").value === "none") ? [] : TOKENS.map((t) => {
+  const G = gridSize();
+  return { ...t, x: rect.x + t.fx * rect.w + t.dx * G, y: rect.y + t.fy * rect.h + t.dy * G, w: G, h: G };
+}));
+/** Narysuj scenę (tło + mapa + siatka sceny + tokeny) kamerą view = {x, y (lewy górny róg w świecie), k (px płótna na jedn. świata)}. */
+function drawScene(g, cw, ch, i, rect, view, bg, veil = false) {
   g.fillStyle = bg; g.fillRect(0, 0, cw, ch);
   const X = (x) => (x - view.x) * view.k, Y = (y) => (y - view.y) * view.k;
   g.drawImage(i, X(rect.x), Y(rect.y), rect.w * view.k, rect.h * view.k);
   g.save(); g.beginPath(); g.rect(X(rect.x), Y(rect.y), rect.w * view.k, rect.h * view.k); g.clip();
   g.strokeStyle = "rgba(0,0,0,.18)"; g.lineWidth = 1;
-  for (let x = rect.x; x < rect.x + rect.w; x += 100) { g.beginPath(); g.moveTo(Math.round(X(x)) + 0.5, Y(rect.y)); g.lineTo(Math.round(X(x)) + 0.5, Y(rect.y + rect.h)); g.stroke(); }
-  for (let y = rect.y; y < rect.y + rect.h; y += 100) { g.beginPath(); g.moveTo(X(rect.x), Math.round(Y(y)) + 0.5); g.lineTo(X(rect.x + rect.w), Math.round(Y(y)) + 0.5); g.stroke(); }
+  for (let x = rect.x; x < rect.x + rect.w; x += gridSize()) { g.beginPath(); g.moveTo(Math.round(X(x)) + 0.5, Y(rect.y)); g.lineTo(Math.round(X(x)) + 0.5, Y(rect.y + rect.h)); g.stroke(); }
+  for (let y = rect.y; y < rect.y + rect.h; y += gridSize()) { g.beginPath(); g.moveTo(X(rect.x), Math.round(Y(y)) + 0.5); g.lineTo(X(rect.x + rect.w), Math.round(Y(y)) + 0.5); g.stroke(); }
+  for (const t of tokenRects(rect)) {
+    if (veil && t.hidden) continue; // zdjęcia multi: bez ukrytych tokenów (jak captureView w Foundry)
+    const r = (t.w * view.k) / 2, cx = X(t.x) + r, cy = Y(t.y) + r;
+    g.globalAlpha = t.hidden ? 0.5 : 1;
+    g.fillStyle = "rgba(0,0,0,.35)"; g.beginPath(); g.arc(cx + r * 0.08, cy + r * 0.12, r * 0.9, 0, 7); g.fill();
+    g.fillStyle = t.c; g.beginPath(); g.arc(cx, cy, r * 0.88, 0, 7); g.fill();
+    g.lineWidth = Math.max(1, r * 0.12); g.strokeStyle = "#f4ead2"; g.stroke();
+    g.fillStyle = "#fff"; g.font = `700 ${Math.round(r * 0.95)}px Signika, sans-serif`; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(t.n, cx, cy + r * 0.05);
+    g.globalAlpha = 1;
+  }
   g.restore();
 }
 let oldScene = null, newScene = null;
@@ -169,10 +195,39 @@ function capture() {
   c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
   const view = { x: 0, y: 0, w: innerWidth, h: innerHeight };
   const crop = photoCrop(view, oldScene.rect, innerWidth / innerHeight);
-  if (sameRect(crop, view, 1)) return { photo: c, cover: null, crop: null };
+  const multi = data().shots === "multi" ? data().style : null;
+  if (sameRect(crop, view, 1) && !multi) return { photo: c, cover: null, crop: null, shots: null };
   const p = document.createElement("canvas"); p.width = c.width; p.height = c.height;
-  drawScene(p.getContext("2d"), p.width, p.height, oldScene.i, oldScene.rect, { x: crop.x, y: crop.y, k: p.width / crop.w }, PAD_BG);
-  return { photo: p, cover: c, crop };
+  drawScene(p.getContext("2d"), p.width, p.height, oldScene.i, oldScene.rect, { x: crop.x, y: crop.y, k: p.width / crop.w }, PAD_BG, !!multi);
+  const shots = multi ? captureShots(multi, crop, p) : null;
+  if (sameRect(crop, view, 1)) return { photo: p, cover: null, crop: null, shots };
+  return { photo: p, cover: c, crop, shots };
+}
+/** Kopia captureShots z newspaper-play.mjs (te same funkcje grupowania i kadrowania; „render” = drawScene kamerą na kadrze). */
+function captureShots(style, est, establishing) {
+  const cap = SHOT_CAP[style], grid = gridSize(), scene = oldScene.rect, aspect = innerWidth / innerHeight;
+  const outW = Math.min(1280, innerWidth * (devicePixelRatio || 1));
+  const rects = tokenRects(scene).filter((t) => !t.hidden).map((t) => {
+    const x0 = Math.max(t.x, scene.x), y0 = Math.max(t.y, scene.y), x1 = Math.min(t.x + t.w, scene.x + scene.w), y1 = Math.min(t.y + t.h, scene.y + scene.h);
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }).filter((r) => r.w > 1 && r.h > 1);
+  const minW = Math.max(4.5 * grid, (outW / 2) * (scene.w / oldScene.i.naturalWidth)); // tekstura mapy powiększona najwyżej 2×
+  const sf = safe(), free = { x: sf.left / innerWidth, y: sf.top / innerHeight, w: 1 - (sf.left + sf.right) / innerWidth, h: 1 - (sf.top + sf.bottom) / innerHeight };
+  const framed = (gs) => gs.map((g) => ({ g, s: shotFrame(g.rect, scene, aspect, { pad: 0.6 * grid, minW, safe: free }) })).filter(({ s }) => s.frame.w < 0.8 * est.w);
+  let picked = framed(clusterRects(rects, 2.5 * grid, cap));
+  if (picked.length < cap) { const loose = framed(clusterRects(rects, 2.5 * grid, Infinity)).slice(0, cap); if (loose.length > picked.length) picked = loose; }
+  const subjects = picked.map(({ g, s }) => ({ ...s, kind: "group", count: g.count, aspect: (s.focus.w * s.frame.w) / (s.focus.h * s.frame.h) }));
+  if (!subjects.length) for (const n of detailSpots(establishing, Math.min(cap, 2))) {
+    const frame = { x: est.x + n.x * est.w, y: est.y + n.y * est.h, w: n.w * est.w, h: (n.w * est.w) / aspect };
+    subjects.push({ frame, focus: { x: 0.15, y: 0.15, w: 0.7, h: 0.7 }, kind: "detail", count: 0, aspect });
+  }
+  return subjects.map((s) => {
+    const t0 = performance.now(), image = document.createElement("canvas");
+    image.width = Math.round(outW); image.height = Math.round(outW / aspect);
+    drawScene(image.getContext("2d"), image.width, image.height, oldScene.i, scene, { x: s.frame.x, y: s.frame.y, k: image.width / s.frame.w }, PAD_BG, true);
+    return { image, focus: s.focus, aspect: s.aspect, kind: s.kind, count: s.count, ms: Math.round(performance.now() - t0),
+      pos: { x: (s.frame.x + s.frame.w / 2 - est.x) / est.w, y: (s.frame.y + s.frame.h / 2 - est.y) / est.h } };
+  });
 }
 /**
  * Kamera odsłony (jak frameRevealCamera w Foundry): kadr nowej sceny bez tła (coverView), start REVEAL_ZOOM bliżej,
@@ -198,12 +253,13 @@ let np = null;
 function begin() {
   np?.dispose();
   const t0 = performance.now();
-  const { photo, cover, crop } = capture();
+  const { photo, cover, crop, shots } = capture();
   const cap = performance.now() - t0;
-  np = createNewspaper({ host: $("host"), photo, cover, crop, coverBg: PAD_BG, data: data(), reduced: $("reduced").checked, lite: $("lite").checked, safe: safe(), seed: +$("seed").value, family: "Amiri", sansFamily: "Signika", condFamily: "Modesto Condensed" });
+  window.lastShots = shots?.map((s) => ({ kind: s.kind, count: s.count, ms: s.ms, aspect: +s.aspect.toFixed(2), pos: s.pos }));
+  np = createNewspaper({ host: $("host"), photo, cover, crop, coverBg: PAD_BG, data: data(), shots, reduced: $("reduced").checked, lite: $("lite").checked, safe: safe(), seed: +$("seed").value, family: "Amiri", sansFamily: "Signika", condFamily: "Modesto Condensed" });
   window.np = np;
   $("oldmap").classList.add("gone"); // „teardown”: stara scena znika, pod spodem nowa
-  np.ready.then(() => log(`zrzut ${cap.toFixed(1)} ms · strona ${np.stats.pageW}px w ${np.stats.buildMs} ms · najazd ${np.stats.pushIn ? JSON.stringify(Object.fromEntries(Object.entries(np.stats.crop).map(([k, v]) => [k, Math.round(v)]))) : "nie"}`));
+  np.ready.then(() => log(`zrzut ${cap.toFixed(1)} ms · zdjęć grup ${shots?.length ?? 0} (sesja ${np.stats.shootMs ?? 0} ms) · strona ${np.stats.pageW}px w ${np.stats.buildMs} ms · najazd ${np.stats.pushIn ? JSON.stringify(Object.fromEntries(Object.entries(np.stats.crop).map(([k, v]) => [k, Math.round(v)]))) : "nie"}`));
   return np;
 }
 async function run() {
@@ -225,7 +281,7 @@ $("texts").onchange = () => setTexts($("texts").value);
 $("pageview").onclick = () => pageView();
 $("sheet").onclick = () => $("sheet").classList.remove("on");
 $("ui").onchange = () => document.body.classList.toggle("ui", $("ui").checked);
-$("old").onchange = drawOld; $("new").onchange = drawOld; $("pad").onchange = drawOld;
+$("old").onchange = drawOld; $("new").onchange = drawOld; $("pad").onchange = drawOld; $("shots").onchange = drawOld;
 addEventListener("resize", drawOld);
 /** Do weryfikacji: zatrzymaj wszystkie animacje na czasie t (ms) od startu bieżącej fazy. */
 const freeze = async (t) => {
@@ -242,7 +298,7 @@ const freeze = async (t) => {
 async function still(phase, t) {
   if (!np || np.closed || !still.keep) { begin(); still.keep = true; }
   await np.ready;
-  const dur = phase === "spin" ? data().spinSec * 1000 : phase === "push" ? PUSH_MS : PRESS_MS;
+  const dur = phase === "spin" ? data().spinSec * 1000 : phase === "push" ? PUSH_MS : phase === "shoot" ? shootMs(np.stats.shots ?? 0, np.stats.reduced) : PRESS_MS;
   await np.seek(phase, Math.min(1, t / dur));
   // kamera odsłony w tej samej chwili odlotu (statycznie)
   if (phase === "spin") { revealCamera(false); for (const a of $("newcam").getAnimations()) { a.pause(); a.currentTime = Math.min(t, revealCameraMs(data().spinSec)); } }
@@ -252,6 +308,8 @@ async function still(phase, t) {
 window.harness = { run, begin, reset, freeze, still, data, safe, capture, revealCamera, pageView, texts: (k) => { $("texts").value = k; setTexts(k); }, set: (o) => { for (const [k, v] of Object.entries(o)) { const el = $(k); if (el.type === "checkbox") el.checked = v; else el.value = v; el.onchange?.(); } } };
 const q = new URLSearchParams(location.search);
 if (q.has("pad")) $("pad").checked = true;
+if (q.has("shots")) $("shots").value = q.get("shots");
+if (q.has("reduced")) $("reduced").checked = true;
 await drawOld();
 if (q.has("clean")) document.body.classList.add("clean");
 if (q.get("style") === "modern") { $("style").value = "modern"; $("kicker").value = "Exclusive"; }

@@ -141,6 +141,9 @@ EN = {
  "Field.PaperStyle": "Look", "PaperStyle.classic": "Classic US broadsheet (1930s–40s)", "PaperStyle.modern": "Modern US tabloid (full colour)",
  "Hint.PaperStyle": "Classic: a big-city daily with weather ears, an EXTRA banner, a halftone photo and narrow columns on yellowed paper. Modern: a full-colour tabloid with a colour flag, page teasers, a huge headline and a colour photo.",
  "Hint.PaperAccent": "Classic: spot colour of the banner. Modern: colour of the flag, labels and frames.",
+ "Field.Shots": "Photographer", "Shots.single": "One photo", "Shots.multi": "Photo session (scene + token groups)",
+ "Hint.Shots": "Photo session: before the page forms, a press photographer snaps the groups of tokens each player can see (tokens standing close together make one photo), then the whole scene. The scene becomes the lead photo and the groups fill the other pictures on the page. Hidden tokens and tokens a player cannot see never appear in that player's photos. With no visible tokens the photographer picks the most detailed parts of the map.",
+ "Hint.SceneShots": "Empty = as in the preset.", "Shots.AsPreset": "As in the preset: {mode}",
 }
 
 PL = {
@@ -282,6 +285,9 @@ PL = {
  "Field.PaperStyle": "Wygląd", "PaperStyle.classic": "Klasyczny dziennik z USA (lata 30.–40.)", "PaperStyle.modern": "Współczesny tabloid z USA (w kolorze)",
  "Hint.PaperStyle": "Klasyczny: wielkomiejski dziennik z ramkami pogody, banerem EXTRA, rastrowym zdjęciem i wąskimi łamami na pożółkłym papierze. Współczesny: kolorowy tabloid z barwną belką, zapowiedziami stron, ogromnym nagłówkiem i kolorowym zdjęciem.",
  "Hint.PaperAccent": "Klasyczny: kolor farby banera. Współczesny: kolor belki z tytułem, etykiet i ramek.",
+ "Field.Shots": "Fotograf", "Shots.single": "Jedno zdjęcie", "Shots.multi": "Sesja zdjęciowa (scena + grupy tokenów)",
+ "Hint.Shots": "Sesja zdjęciowa: zanim strona się uformuje, fotograf prasowy robi zdjęcia grupom tokenów, które widzi dany gracz (tokeny stojące blisko siebie to jedno zdjęcie), a na końcu całej scenie. Scena trafia na zdjęcie główne, a grupy — na pozostałe zdjęcia na stronie. Ukryte tokeny i tokeny, których gracz nie widzi, nigdy nie trafiają na jego zdjęcia. Gdy żaden token nie jest widoczny, fotograf wybiera najbardziej szczegółowe fragmenty mapy.",
+ "Hint.SceneShots": "Puste = jak w presecie.", "Shots.AsPreset": "Jak w presecie: {mode}",
 }
 
 root = pathlib.Path(__file__).resolve().parent.parent / "lang"

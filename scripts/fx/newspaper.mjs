@@ -55,12 +55,21 @@ export const NEWSPAPER_DEFAULT_TEXT = Object.freeze({
 });
 export const DEFAULT_NEWSPAPER = Object.freeze({
   style: "classic", masthead: "", headline: "", deck: "", caption: "", stories: Object.freeze([]), place: "", date: "",
-  paper: "#ebe3cf", accent: "#d0121b", spinSec: 2.4, turns: 3, direction: "cw", playerSkip: false,
+  paper: "#ebe3cf", accent: "#d0121b", spinSec: 2.4, turns: 3, direction: "cw", playerSkip: false, shots: "single",
 });
+/** Fotograf: jedno zdjęcie (widok gracza) albo sesja „multi” — zdjęcie sceny + zdjęcia grup tokenów w pozostałych miejscach strony. */
+export const NEWSPAPER_SHOTS = Object.freeze(["single", "multi"]);
 /** Czasy (ms): uformowanie strony, chwila na „przeczytanie” przed odlotem, spokojne wejście/wyjście (reduced motion). */
 export const PRESS_MS = 1450, HOLD_MS = 450, CALM_IN_MS = 650, CALM_OUT_MS = 900;
 /** Najazd kamery na samą mapę, zanim kadr stanie się zdjęciem (gdy na ekranie było widać tło poza sceną). */
 export const PUSH_MS = 650;
+/**
+ * Sesja fotografa (tryb multi), ms: chwila na podniesienie aparatu, na każdą grupę (mniej grup = dłużej), osiadanie na
+ * końcowym zdjęciu sceny. Migawka zamyka się na 55 ms przed cięciem, czerń 25 ms, otwiera przez 80 ms.
+ * Ograniczony ruch: spokojne przenikania (bez migawki, błysku i ruchu kamery).
+ */
+export const SHOOT = Object.freeze({ lead: 160, step: (n) => (n <= 2 ? 440 : 360), final: 380, close: 55, black: 25, open: 80, calmLead: 120, calmStep: 400, calmFade: 180, calmFinal: 260 });
+export const shootMs = (n, reduced = false) => (reduced ? SHOOT.calmLead + n * SHOOT.calmStep + SHOOT.calmFinal : SHOOT.lead + n * SHOOT.step(n) + SHOOT.final);
 /** Odsłona nowej mapy: kamera startuje o tyle bliżej i osiada na kadrze bez tła poza sceną (czas = odlot + zapas). */
 export const REVEAL_ZOOM = 1.12, REVEAL_TAIL_MS = 600;
 export const revealCameraMs = (spinSec) => Math.round(spinSec * 1000 + REVEAL_TAIL_MS);
@@ -146,6 +155,8 @@ export function sanitizeNewspaper(raw) {
     turns: Math.round(num(r.turns, DEFAULT_NEWSPAPER.turns, 1, 6)),
     direction: r.direction === "ccw" ? "ccw" : "cw",
     playerSkip: r.playerSkip === true,
+    // stare presety nie mają pola → jedno zdjęcie (dotychczasowe zachowanie)
+    shots: r.shots === "multi" ? "multi" : "single",
   };
 }
 
@@ -160,7 +171,146 @@ export function applyNewspaperOverride(base, ov) {
   for (const k of NEWSPAPER_TEXT_KEYS) { const v = line(ov[k], NEWSPAPER_LIMITS[k]); if (v) o[k] = v; }
   const s = storyList(ov.stories);
   o.stories = Array.from({ length: Math.max(b.stories.length, s.length) }, (_, i) => s[i] || b.stories[i] || "");
+  // fotograf per scena: "single" / "multi"; puste (albo cokolwiek innego) = jak w presecie
+  if (NEWSPAPER_SHOTS.includes(ov.shots)) o.shots = ov.shots;
   return sanitizeNewspaper(o);
+}
+
+/* ================================================================ fotograf (tryb multi): grupy tokenów → kadry → miejsca na stronie */
+/** Ile zdjęć grup (poza zdjęciem sceny) mieści strona danego wyglądu — tyle najwyżej renderujemy. */
+export const SHOT_CAP = Object.freeze({ classic: 2, modern: 4 });
+/** Miejsca na zdjęcia (poza głównym), w kolejności ważności; `aspect` = szer./wys. ramki na stronie. */
+export const SHOT_SLOTS = Object.freeze({
+  classic: Object.freeze([{ id: "lower", aspect: 1 / 0.62 }, { id: "side", aspect: 1 / 1.22 }]),
+  modern: Object.freeze([{ id: "card0", aspect: 3.07 }, { id: "teaser0", aspect: 0.76 }, { id: "card1", aspect: 3.07 }, { id: "teaser1", aspect: 0.76 }, { id: "card2", aspect: 3.07 }]),
+});
+/** Odstęp między prostokątami (0, gdy nachodzą). */
+const rectGap = (a, b) => Math.hypot(Math.max(0, Math.max(a.x, b.x) - Math.min(a.x + a.w, b.x + b.w)), Math.max(0, Math.max(a.y, b.y) - Math.min(a.y + a.h, b.y + b.h)));
+const union = (a, b) => { const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y); return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y }; };
+
+/**
+ * Grupy tokenów do zdjęć: tokeny bliżej siebie niż `link` (odstęp krawędzi, jedn. świata) łączą się w jedną grupę (tłum =
+ * jedno zdjęcie). Gdy grup jest więcej niż `max`, łączymy dalej najbliższe pary, póki odstęp ≤ 1,5 × link; resztę
+ * porządkujemy wg liczby tokenów (potem pola) i bierzemy `max` pierwszych. Zwraca [{rect, count}] (od najważniejszej).
+ */
+export function clusterRects(rects, link, max) {
+  let gs = rects.filter((r) => r && r.w > 0 && r.h > 0).map((r) => ({ rect: { ...r }, count: 1 }));
+  const mergeClosest = (limit) => {
+    let best = null;
+    for (let i = 0; i < gs.length; i++) for (let j = i + 1; j < gs.length; j++) {
+      const d = rectGap(gs[i].rect, gs[j].rect);
+      if (d <= limit && (!best || d < best.d)) best = { i, j, d };
+    }
+    if (!best) return false;
+    const a = gs[best.i], b = gs[best.j];
+    gs = gs.filter((_, k) => k !== best.i && k !== best.j);
+    gs.push({ rect: union(a.rect, b.rect), count: a.count + b.count });
+    return true;
+  };
+  while (mergeClosest(link));
+  while (gs.length > max && mergeClosest(link * 1.5));
+  return gs.sort((a, b) => b.count - a.count || b.rect.w * b.rect.h - a.rect.w * a.rect.h).slice(0, Math.max(0, max));
+}
+
+/**
+ * Prostokąt o proporcjach `aspect` zawierający `r` (powiększony, nie rozciągnięty) i dociśnięty do wnętrza `scene`.
+ * `safe` = wolna od UI część kadru (0…1; pasek boczny, pasek makr): `r` mieści się w niej i leży na jej środku,
+ * o ile pozwala krawędź sceny — na pełnoekranowym zdjęciu grupa nie chowa się pod interfejsem.
+ */
+export function fitFrame(r, scene, aspect, minW = 0, safe = { x: 0, y: 0, w: 1, h: 1 }) {
+  const sw = clamp(safe.w, 0.3, 1), sh = clamp(safe.h, 0.3, 1);
+  let w = Math.max(r.w / sw, (r.h * aspect) / sh, minW);
+  w = Math.min(w, scene.w, scene.h * aspect);
+  const h = w / aspect;
+  const ox = w * (0.5 - (safe.x + sw / 2)), oy = h * (0.5 - (safe.y + sh / 2));
+  const cx = clamp(r.x + r.w / 2 + ox, scene.x + w / 2, scene.x + scene.w - w / 2), cy = clamp(r.y + r.h / 2 + oy, scene.y + h / 2, scene.y + scene.h - h / 2);
+  return { x: cx - w / 2, y: cy - h / 2, w, h };
+}
+
+/**
+ * Kadr zdjęcia grupy w świecie: prostokąt grupy z marginesem (≥ `pad` i 30 % rozmiaru), szerokość ≥ `minW` (samotny token to
+ * plan średni, nie portret z bliska), proporcje ekranu, w całości wewnątrz sceny (nigdy tło poza sceną). Zwraca
+ * {frame, focus} — `focus` to prostokąt grupy z marginesem we współrzędnych 0…1 kadru (do wycinania miejsc o innych proporcjach).
+ */
+export function shotFrame(group, scene, aspect, { pad = 0, minW = 0, safe } = {}) {
+  const p = Math.max(pad, 0.3 * Math.max(group.w, group.h) / 2);
+  const g = { x: group.x - p, y: group.y - p, w: group.w + 2 * p, h: group.h + 2 * p };
+  const frame = fitFrame(g, scene, aspect, minW, safe);
+  const fx0 = clamp((g.x - frame.x) / frame.w, 0, 1), fy0 = clamp((g.y - frame.y) / frame.h, 0, 1);
+  const fx1 = clamp((g.x + g.w - frame.x) / frame.w, 0, 1), fy1 = clamp((g.y + g.h - frame.y) / frame.h, 0, 1);
+  return { frame, focus: { x: fx0, y: fy0, w: Math.max(0.05, fx1 - fx0), h: Math.max(0.05, fy1 - fy0) } };
+}
+
+/**
+ * Wycinek obrazu `iw`×`ih` o proporcjach `aspect` dla miejsca na stronie: obejmuje `focus` (0…1), gdy się da — inaczej
+ * największy możliwy wycinek wyśrodkowany na nim. Zwraca {sx, sy, sw, sh} w px obrazu.
+ */
+export function focusCrop(iw, ih, focus, aspect) {
+  const f = focus ?? { x: 0, y: 0, w: 1, h: 1 };
+  const fr = fitFrame({ x: f.x * iw, y: f.y * ih, w: f.w * iw, h: f.h * ih }, { x: 0, y: 0, w: iw, h: ih }, aspect);
+  return { sx: fr.x, sy: fr.y, sw: fr.w, sh: fr.h };
+}
+
+/**
+ * Miejsca z największą ilością szczegółów na zdjęciu (gdy nie ma tokenów do sfotografowania): energia krawędzi na
+ * zmniejszonej kopii, okno `size` (ułamek szerokości) o proporcjach obrazu, kolejne okna nie nachodzą na siebie bardziej
+ * niż w 25 %. Zwraca znormalizowane prostokąty (0…1).
+ */
+export function detailSpots(img, n = 2, size = 0.42) {
+  const sw = 64, sh = Math.max(8, Math.round((64 * img.height) / img.width));
+  const c = mk(sw, sh), g = c.getContext("2d", { willReadFrequently: true });
+  g.drawImage(img, 0, 0, sw, sh);
+  const px = g.getImageData(0, 0, sw, sh).data, L = new Float32Array(sw * sh);
+  for (let i = 0, j = 0; i < L.length; i++, j += 4) L[i] = 0.2126 * px[j] + 0.7152 * px[j + 1] + 0.0722 * px[j + 2];
+  // energia: |∇L| (różnice sąsiadów), sumy prefiksowe do szybkiego okna
+  const S = new Float64Array((sw + 1) * (sh + 1));
+  for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
+    const i = y * sw + x, e = Math.abs(L[i] - L[y * sw + Math.min(sw - 1, x + 1)]) + Math.abs(L[i] - L[Math.min(sh - 1, y + 1) * sw + x]);
+    S[(y + 1) * (sw + 1) + x + 1] = e + S[y * (sw + 1) + x + 1] + S[(y + 1) * (sw + 1) + x] - S[y * (sw + 1) + x];
+  }
+  const ww = Math.max(4, Math.round(sw * size)), wh = Math.max(3, Math.round(sh * size));
+  const box = (x, y) => S[(y + wh) * (sw + 1) + x + ww] - S[y * (sw + 1) + x + ww] - S[(y + wh) * (sw + 1) + x] + S[y * (sw + 1) + x];
+  const out = [];
+  for (let k = 0; k < n; k++) {
+    let best = null;
+    for (let y = 0; y + wh <= sh; y++) for (let x = 0; x + ww <= sw; x++) {
+      const overlap = out.some((o) => {
+        const ix = Math.max(0, Math.min(x + ww, o.x + ww) - Math.max(x, o.x)), iy = Math.max(0, Math.min(y + wh, o.y + wh) - Math.max(y, o.y));
+        return ix * iy > 0.25 * ww * wh;
+      });
+      if (overlap) continue;
+      const v = box(x, y);
+      if (!best || v > best.v) best = { x, y, v };
+    }
+    if (!best) break;
+    out.push(best);
+  }
+  return out.map((o) => ({ x: o.x / sw, y: o.y / sh, w: ww / sw, h: wh / sh }));
+}
+
+/**
+ * Które zdjęcie trafia w które miejsce strony: miejsca po kolei wg ważności, do każdego najważniejsze z pozostałych zdjęć —
+ * chyba że drugie w kolejce ma wyraźnie lepsze proporcje (szeroka grupa → szerokie miejsce, zwarta → wąskie).
+ * `shots` = [{aspect, …}] od najważniejszego. Zwraca {idMiejsca: shot}.
+ */
+export function assignShots(shots, style) {
+  const slots = SHOT_SLOTS[style] ?? SHOT_SLOTS.classic, left = [...(shots ?? [])], out = {};
+  const miss = (s, a) => Math.abs(Math.log((s.aspect || 1) / a));
+  for (const slot of slots) {
+    if (!left.length) break;
+    let k = 0;
+    if (left.length > 1 && miss(left[1], slot.aspect) + 0.35 < miss(left[0], slot.aspect)) k = 1;
+    out[slot.id] = left.splice(k, 1)[0];
+  }
+  return out;
+}
+
+/** Fragment obrazu (`focus` w miejscu o proporcjach `aspect`) jako osobne płótno w natywnej rozdzielczości. */
+function cropCanvas(img, focus, aspect) {
+  const c = focusCrop(img.width, img.height, focus, aspect);
+  const out = mk(c.sw, c.sh);
+  out.getContext("2d").drawImage(img, c.sx, c.sy, c.sw, c.sh, 0, 0, out.width, out.height);
+  return out;
 }
 
 const MONTHS_AP = ["Jan.", "Feb.", "March", "April", "May", "June", "July", "Aug.", "Sept.", "Oct.", "Nov.", "Dec."];
@@ -406,8 +556,10 @@ const CLASSIC_INDEX = "INSIDE TODAY — Comics, Page 14 · Editorials, Page 10 �
  * `fonts` = {serif, sans, cond} (nazwy krojów załadowanych w dokumencie albo null → kroje systemowe).
  * Zwraca { canvas, photoRect, H } (photoRect w px płótna strony).
  */
-export function paintPage({ W, photo, aspect, data, seed = 1, fonts = {}, lite = false, cssScale = 1, now = new Date() }) {
+export function paintPage({ W, photo, aspect, data, seed = 1, fonts = {}, lite = false, cssScale = 1, now = new Date(), shots = null }) {
   const r = mulberry(seed);
+  // tryb multi: zdjęcia grup w miejscach „lower” (2 szpalty pod złożeniem) i „side” (1 szpalta nad artykułem bocznym)
+  const slot = shots?.length ? assignShots(shots, "classic") : null;
   const T = newspaperText(data, now);
   const u = W / 1000, H = Math.round(W * 1.42);
   const c = mk(W, H), g = c.getContext("2d");
@@ -599,9 +751,18 @@ export function paintPage({ W, photo, aspect, data, seed = 1, fonts = {}, lite =
 
   // 5. szpalta: artykuł boczny (nagłówek 1 z listy)
   const k5 = colX(4);
+  let sideTop = bodyTop - 2 * u;
+  if (slot?.side) {
+    // jednoszpaltowe zdjęcie nad artykułem bocznym (jak „cut” w prasie z epoki) + krótki podpis kursywą
+    const ch = Math.round(colW * 1.22), cr = { x: k5, y: bodyTop, w: colW, h: ch };
+    halftone(g, cropCanvas(slot.side.image, slot.side.focus, colW / ch), cr, (lite ? 3.3 : 2.7) * cssScale, ink, data.paper);
+    g.lineWidth = 0.8 * u; g.strokeRect(cr.x, cr.y, cr.w, cr.h);
+    const cap = fit("Another view of the scene.", { face: (s) => ({ font: SER(400, s, "", true), sx: 1 }), maxW: colW, maxLines: 2, max: 8.4 * u, min: 7 * u });
+    sideTop = block(cap, k5, cr.y + ch + 3 * u, colW, 1.2, "left", 0.9) + 12 * u;
+  }
   const s1 = upper(T.stories[0]);
   const sh = fit(s1, { face: (s) => COND(s, s1), maxW: colW, maxLines: 4, max: 23 * u, min: 13 * u, balance: true });
-  let y5 = block(sh, k5, bodyTop - 2 * u, colW, 1.02, "center", 0.8) + 9 * u;
+  let y5 = block(sh, k5, sideTop, colW, 1.02, "center", 0.8) + 9 * u;
   rule(k5 + colW * 0.3, y5, colW * 0.4, 1 * u); y5 += 6 * u;
   const side = proseStream(r);
   column(k5, y5, colW, yLower - 14 * u, { start: dateline, jump: "Continued on Page 4, Column 2", src: side });
@@ -629,15 +790,29 @@ export function paintPage({ W, photo, aspect, data, seed = 1, fonts = {}, lite =
   rule(m + w3 / 2 - 40 * u, yl, 80 * u, 1 * u); yl += 6 * u;
   const lower = proseStream(r);
   // jednoszpaltowa „winietka” (zbliżenie fragmentu zdjęcia w rastrze) — przełamuje szarość łamu jak w prasie z epoki
-  let yl0 = yl;
-  if (yFoot - 18 * u - yl > colW * 1.05) {
+  let yl0 = yl, span = 1;
+  const w2 = 2 * colW + gap, h2 = Math.round(w2 * 0.62);
+  if (slot?.lower && yFoot - 18 * u - yl > h2 + 26 * u + 4 * lead) {
+    // tryb multi: zdjęcie grupy na dwie szpalty pod złożeniem (proza obu szpalt zaczyna się pod podpisem)
+    const cr = { x: colX(0), y: yl + 2 * u, w: w2, h: h2 };
+    halftone(g, cropCanvas(slot.lower.image, slot.lower.focus, w2 / h2), cr, (lite ? 3.3 : 2.7) * cssScale, ink, data.paper);
+    g.lineWidth = 0.8 * u; g.strokeRect(cr.x, cr.y, cr.w, cr.h);
+    g.font = SER(400, 7.6 * u); say("STAFF PHOTO", cr.x + w2, cr.y + h2 + 9.5 * u, 1, "right");
+    g.font = SER(400, 8.4 * u, "", true);
+    say("Scene of the disturbance.", cr.x, cr.y + h2 + 11 * u);
+    yl0 = cr.y + h2 + 18 * u; span = 2;
+  } else if (yFoot - 18 * u - yl > colW * 1.05) {
     const ch = Math.round(colW * 0.62), zoom = 2.4;
-    const pc = mk(photo.width / zoom, photo.height / zoom);
-    const fx = 0.25 + 0.5 * r(), fy = 0.3 + 0.4 * r();
-    pc.getContext("2d").drawImage(photo, -(photo.width - pc.width) * fx, -(photo.height - pc.height) * fy);
-    // kadr komórki: środek wycinka w proporcjach winietki
-    const cut = mk(Math.min(pc.width, pc.height * (colW / ch)), Math.min(pc.height, pc.width * (ch / colW)));
-    cut.getContext("2d").drawImage(pc, -(pc.width - cut.width) / 2, -(pc.height - cut.height) / 2);
+    let cut;
+    if (slot?.lower) cut = cropCanvas(slot.lower.image, slot.lower.focus, colW / ch); // za mało miejsca na 2 szpalty
+    else {
+      const pc = mk(photo.width / zoom, photo.height / zoom);
+      const fx = 0.25 + 0.5 * r(), fy = 0.3 + 0.4 * r();
+      pc.getContext("2d").drawImage(photo, -(photo.width - pc.width) * fx, -(photo.height - pc.height) * fy);
+      // kadr komórki: środek wycinka w proporcjach winietki
+      cut = mk(Math.min(pc.width, pc.height * (colW / ch)), Math.min(pc.height, pc.width * (ch / colW)));
+      cut.getContext("2d").drawImage(pc, -(pc.width - cut.width) / 2, -(pc.height - cut.height) / 2);
+    }
     const cr = { x: colX(0), y: yl + 2 * u, w: colW, h: ch };
     halftone(g, cut, cr, (lite ? 3.3 : 2.7) * cssScale, ink, data.paper);
     g.lineWidth = 0.8 * u; g.strokeRect(cr.x, cr.y, cr.w, cr.h);
@@ -645,9 +820,9 @@ export function paintPage({ W, photo, aspect, data, seed = 1, fonts = {}, lite =
     say("Scene of the disturbance.", cr.x, cr.y + ch + 11 * u);
     yl0 = cr.y + ch + 18 * u;
   }
-  for (let i = 0; i < 3; i++) column(colX(i), i === 0 ? yl0 : yl, colW, yFoot - 18 * u, { start: i === 0 ? dateline : "", subs: false, src: lower, jump: i === 2 ? "Continued on Page 6, Column 1" : "" });
+  for (let i = 0; i < 3; i++) column(colX(i), i < span ? yl0 : yl, colW, yFoot - 18 * u, { start: i === 0 ? dateline : "", subs: false, src: lower, jump: i === 2 ? "Continued on Page 6, Column 1" : "" });
   g.globalAlpha = 0.55;
-  for (let i = 1; i < 3; i++) rule(colX(i) - gap / 2 - 0.35 * u, yl - 2 * u, 0.7 * u, yFoot - 20 * u - yl);
+  for (let i = 1; i < 3; i++) { const top = i < span ? yl0 : yl; rule(colX(i) - gap / 2 - 0.35 * u, top - 2 * u, 0.7 * u, yFoot - 20 * u - top); }
   g.globalAlpha = 1;
   // ramka: podwójna linia, „IN BRIEF”, krótkie wiadomości z nagłówkami 3–6 z listy
   const ax = colX(3), aw = 2 * colW + gap, ay = yLower + 14 * u, ah = yFoot - 18 * u - ay;
@@ -706,8 +881,10 @@ const MODERN_PAGES = [4, 6, 9, 15, 22];
  * + numer strony), pasek z datą i ceną, etykieta + ogromny ścieśniony nagłówek wersalikami, lead szeryfem, kolorowe zdjęcie
  * z belką podpisu, 3 łamy (bylina, dateline, „ciąg dalszy”), boczne ramki, rząd kart. Każdy napis — prawdziwy tekst.
  */
-export function paintModern({ W, photo, aspect, data, seed = 1, fonts = {}, lite = false, now = new Date() }) {
+export function paintModern({ W, photo, aspect, data, seed = 1, fonts = {}, lite = false, now = new Date(), shots = null }) {
   const r = mulberry(seed ^ 0x9e3779b9);
+  // tryb multi: zdjęcia grup w zapowiedziach (flaga) i kartach u dołu; miejsca bez zdjęcia — wycinki zdjęcia sceny jak dotąd
+  const slot = shots?.length ? assignShots(shots, "modern") : null;
   const T = newspaperText(data, now);
   const u = W / 1000, H = Math.round(W * 1.42);
   const c = mk(W, H), g = c.getContext("2d");
@@ -732,6 +909,15 @@ export function paintModern({ W, photo, aspect, data, seed = 1, fonts = {}, lite
     g.save();
     g.filter = "saturate(1.18) contrast(1.06)";
     g.drawImage(photo, sx, sy, cw2, ch2, x, y, w, h);
+    g.restore();
+  };
+  /** Zdjęcie grupy (tryb multi) w prostokącie: wycinek wokół grupy w proporcjach miejsca; bez zdjęcia — `fallback()`. */
+  const shotIn = (shot, x, y, w, h, fallback) => {
+    if (!shot) return fallback();
+    const s = focusCrop(shot.image.width, shot.image.height, shot.focus, w / h);
+    g.save();
+    g.filter = "saturate(1.18) contrast(1.06)";
+    g.drawImage(shot.image, s.sx, s.sy, s.sw, s.sh, x, y, w, h);
     g.restore();
   };
   /** Prozą do lewej (łam współczesny: bez justowania); `start` — wytłuszczony dateline, `jump` — „ciąg dalszy” na końcu. */
@@ -794,7 +980,7 @@ export function paintModern({ W, photo, aspect, data, seed = 1, fonts = {}, lite
     const tx = m + cw - (teasers - i) * (teaseW + teaseGap) + teaseGap - 12 * u, ty = y + 12 * u, th = bandH - 24 * u;
     g.fillStyle = "rgba(255,255,255,0.14)"; g.fillRect(tx, ty, teaseW, th);
     const pwid = teaseW * 0.4;
-    photoIn(tx + 6 * u, ty + 6 * u, pwid, th - 12 * u, 0.2 + 0.6 * r(), 0.3 + 0.4 * r(), 2.4);
+    shotIn(slot?.[`teaser${i}`], tx + 6 * u, ty + 6 * u, pwid, th - 12 * u, () => photoIn(tx + 6 * u, ty + 6 * u, pwid, th - 12 * u, 0.2 + 0.6 * r(), 0.3 + 0.4 * r(), 2.4));
     const lx = tx + pwid + 14 * u, lw = teaseW - pwid - 22 * u;
     g.font = S(700, 8.6 * u); g.fillStyle = "rgba(255,255,255,0.82)"; say(`PAGE ${MODERN_PAGES[i]}`, lx, ty + 17 * u);
     const tf = fit(T.stories[i], { face: BOLD, maxW: lw, maxLines: 4, max: 13.5 * u, min: 8.6 * u });
@@ -827,7 +1013,9 @@ export function paintModern({ W, photo, aspect, data, seed = 1, fonts = {}, lite
   y = block(dk, m, y, 1.28, "#444444", 0.86) + dk.size * 0.9;
 
   /* ---- zdjęcie w kolorze na całą szerokość + belka podpisu (edytowalny podpis) */
-  const yCards = H - m - 180 * u;
+  // tryb multi: wyższe zdjęcia kart (zdjęcia grup zamiast pasków wyciętych ze sceny), łam wyżej o tyle samo
+  const cardImg = (slot ? 96 : 72) * u;
+  const yCards = H - m - 180 * u - (cardImg - 72 * u);
   let pw = cw, ph = pw / aspect;
   const maxPh = Math.max(0.22 * W, Math.min(0.56 * W, yCards - 24 * u - 210 * u - y));
   if (ph > maxPh) { ph = maxPh; pw = ph * aspect; }
@@ -884,10 +1072,10 @@ export function paintModern({ W, photo, aspect, data, seed = 1, fonts = {}, lite
   /* ---- rząd kart u dołu: wycinek zrzutu + nagłówek 4–6 z listy + numer strony */
   g.fillStyle = ink; g.fillRect(m, yCards, cw, 3 * u);
   g.font = S(700, 12 * u); g.fillStyle = acc; say("MORE TOP STORIES", m, yCards + 22 * u);
-  const cards = 3, cgap = 18 * u, cwid = (cw - cgap * (cards - 1)) / cards, cy = yCards + 34 * u, cimg = 72 * u;
+  const cards = 3, cgap = 18 * u, cwid = (cw - cgap * (cards - 1)) / cards, cy = yCards + 34 * u, cimg = cardImg;
   for (let i = 0; i < cards; i++) {
     const cx = m + i * (cwid + cgap);
-    photoIn(cx, cy, cwid, cimg, 0.15 + 0.7 * r(), 0.2 + 0.6 * r(), 2 + r() * 1.5);
+    shotIn(slot?.[`card${i}`], cx, cy, cwid, cimg, () => photoIn(cx, cy, cwid, cimg, 0.15 + 0.7 * r(), 0.2 + 0.6 * r(), 2 + r() * 1.5));
     const cf = fit(T.stories[3 + i], { face: BOLD, maxW: cwid, maxLines: 2, max: 14 * u, min: 9.5 * u });
     const yy = block(cf, cx, cy + cimg + 4 * u, 1.14, ink, 0.95);
     g.font = S(600, 9 * u); g.fillStyle = "#666666"; say(`Page ${MODERN_PAGES[2 + i]}`, cx, yy + 14 * u);
@@ -1071,7 +1259,7 @@ const ABS = "position:absolute;left:0;top:0;width:100%;height:100%;display:block
  * dokładnie tego, co było na ekranie, a `crop` = prostokąt zdjęcia w px ekranu (może wystawać poza ekran). Zasłona zaczyna
  * się od `cover`, a kamera najeżdża na `crop` i przenika w czyste zdjęcie (faza „najazd”, PUSH_MS) — bez skoku.
  */
-export function createNewspaper({ host = document.body, photo, cover = null, crop = null, coverBg = "#000", data, reduced = prefersReducedMotion(), lite = false, safe = null, seed = (Math.random() * 2 ** 32) >>> 0, family = null, sansFamily = null, condFamily = null } = {}) {
+export function createNewspaper({ host = document.body, photo, cover = null, crop = null, coverBg = "#000", data, reduced = prefersReducedMotion(), lite = false, safe = null, seed = (Math.random() * 2 ** 32) >>> 0, family = null, sansFamily = null, condFamily = null, shots = null } = {}) {
   const d = sanitizeNewspaper(data);
   const modern = d.style === "modern";
   const dir = d.direction === "ccw" ? -1 : 1;
@@ -1080,17 +1268,24 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
   const root = document.createElement("div");
   root.className = "srnp-root"; root.style.cssText = ROOT_CSS;
   host.append(root);
-  // najazd potrzebny tylko, gdy kadr zdjęcia różni się od ekranu
-  const pushIn = !!(cover && crop && crop.w > 1 && crop.h > 1) && !sameRect(crop, { x: 0, y: 0, w: VW, h: VH }, 1);
-  // natychmiastowa zasłona: dokładnie to, co było na ekranie
-  const first = pushIn ? cover : photo;
+  // tryb multi: fotograf robi zdjęcia grup (shots = [{image, focus, aspect, pos}]), zanim zdjęcie sceny stanie się gazetą
+  const multi = d.shots === "multi" && Array.isArray(shots) && shots.length > 0;
+  // najazd potrzebny tylko, gdy kadr zdjęcia różni się od ekranu (w trybie multi zamiast najazdu jest sesja: cięcie na kadr)
+  const pushIn = !multi && !!(cover && crop && crop.w > 1 && crop.h > 1) && !sameRect(crop, { x: 0, y: 0, w: VW, h: VH }, 1);
+  // natychmiastowa zasłona: dokładnie to, co było na ekranie (multi: kopia, bo zdjęcie sceny pokaże się osobno na końcu sesji)
+  let first = pushIn ? cover : photo;
+  if (multi) {
+    if (cover) first = cover;
+    else { first = mk(photo.width, photo.height); first.getContext("2d").drawImage(photo, 0, 0); }
+  }
   first.style.cssText = `${ABS}`;
   const flat = document.createElement("div");
   flat.style.cssText = `${ABS}background:${/^#[0-9a-f]{3,8}$/i.test(coverBg) ? coverBg : "#000"};overflow:hidden;`;
   flat.append(first);
   root.append(flat);
 
-  const stats = { reduced: !!reduced, lite: !!lite, buildMs: 0, pageW: 0, photoW: photo.width, photoH: photo.height, pushIn, crop: pushIn ? { ...crop } : null };
+  const stats = { reduced: !!reduced, lite: !!lite, buildMs: 0, pageW: 0, photoW: photo.width, photoH: photo.height, pushIn, crop: pushIn ? { ...crop } : null,
+    multi, shots: multi ? shots.length : 0, shootMs: multi ? shootMs(shots.length, reduced) : 0 };
   const anims = new Set();
   let closed = false, built = null, pressDone = null;
   const play = (el, kf, opts) => {
@@ -1118,9 +1313,10 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
     const res = lite ? Math.min(1.25, Math.max(1, dpr)) : Math.min(2, Math.max(1.5, dpr));
     const W = Math.round(Math.min(2200, restW * res));
     // cssScale = px płótna strony na 1 px CSS w spoczynku (skok rastra liczony w px ekranu)
+    const pageShots = multi ? shots : null;
     const page = modern
-      ? paintModern({ W, photo, aspect: photo.width / photo.height, data: d, seed, fonts, lite })
-      : paintPage({ W, photo, aspect: photo.width / photo.height, data: d, seed, fonts, lite, cssScale: W / restW });
+      ? paintModern({ W, photo, aspect: photo.width / photo.height, data: d, seed, fonts, lite, shots: pageShots })
+      : paintPage({ W, photo, aspect: photo.width / photo.height, data: d, seed, fonts, lite, cssScale: W / restW, shots: pageShots });
     stats.pageW = W; stats.buildMs = Math.round(performance.now() - t0);
 
     // tło: stara scena mocno rozmyta i przyciemniona (głębia ostrości), statyczne
@@ -1209,6 +1405,96 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
       cover.remove();
     })();
     return pushDone;
+  }
+
+  /* ---- sesja fotografa (tryb multi, zamiast najazdu): z widoku gracza cięcia migawką na kolejne grupy, na końcu zdjęcie
+     sceny (to, które staje się zdjęciem głównym strony). Każde cięcie ukrywa zamknięta migawka; po otwarciu błysk flesza
+     i krótkie osiadanie kamery (z lekkim przesunięciem w stronę, z której przyszła — kamera „przeskoczyła” na grupę).
+     Ograniczony ruch: te same zdjęcia, spokojne przenikania bez migawki, błysku i ruchu. */
+  let shootEls = null;
+  const shootLayers = () => {
+    if (shootEls) return shootEls;
+    // te same płótna, z których malarz strony wycina miejsca (drawImage z płótna w DOM działa tak samo)
+    const show = shots.map((s) => {
+      s.image.style.cssText = `${ABS}opacity:0;transform-origin:50% 50%;will-change:transform,opacity;`;
+      return s.image;
+    });
+    const bar = (top) => {
+      const b = document.createElement("div");
+      b.style.cssText = `position:absolute;left:0;width:100%;height:50.5%;${top ? "top:0" : "bottom:0"};background:#050505;transform:translateY(${top ? -101 : 101}%);will-change:transform;`;
+      return b;
+    };
+    const fl = document.createElement("div");
+    fl.style.cssText = `${ABS}background:#fffaf0;opacity:0;mix-blend-mode:screen;will-change:opacity;`;
+    photo.style.cssText = `${ABS}opacity:0;transform-origin:50% 50%;will-change:transform,opacity;`;
+    first.style.transformOrigin = "50% 50%";
+    const top = reduced ? null : bar(true), bottom = reduced ? null : bar(false);
+    flat.append(...show, photo, fl);
+    if (!reduced) flat.append(top, bottom);
+    shootEls = { show, flash: fl, top, bottom };
+    return shootEls;
+  };
+  /** Kierunek „przeskoku” kamery na zdjęcie k (k = shots.length → zdjęcie sceny) — z położeń kadrów względem widoku. */
+  const hop = (k) => {
+    const at = (i) => (i < 0 || i >= shots.length ? { x: 0.5, y: 0.5 } : shots[i].pos ?? { x: 0.5, y: 0.5 });
+    const a = at(k - 1), b = at(k), dx = b.x - a.x, dy = (b.y - a.y) * (VH / VW), l = Math.hypot(dx, dy);
+    return l < 0.02 ? { x: 0, y: 0 } : { x: dx / l, y: dy / l };
+  };
+  /** Stan warstw sesji w chwili t∈[0,1]. */
+  const shootFrame = (t) => {
+    const n = shots.length, T = shootMs(n, reduced), ms = t * T, S = SHOOT;
+    const out = {};
+    if (reduced) {
+      const cut = (k) => S.calmLead + k * S.calmStep;
+      shootEls.show.forEach((_, k) => { out[`show.${k}`] = { opacity: smooth(cut(k), cut(k) + S.calmFade, ms) }; });
+      out.final = { opacity: smooth(cut(n), cut(n) + S.calmFade, ms) };
+      return out;
+    }
+    const P = S.step(n), cut = (k) => S.lead + k * P;
+    // migawka: 0 = otwarta, 1 = zamknięta (zamyka się przed każdym cięciem, czerń, otwiera)
+    let shut = 0, flash = 0;
+    for (let k = 0; k <= n; k++) {
+      const c = cut(k);
+      if (ms >= c - S.close && ms < c) shut = Math.max(shut, smooth(c - S.close, c, ms));
+      else if (ms >= c && ms < c + S.black) shut = 1;
+      else if (ms >= c + S.black && ms < c + S.black + S.open) shut = Math.max(shut, 1 - smooth(c + S.black, c + S.black + S.open, ms));
+      const fx = (ms - c - S.black) / 190;
+      if (fx >= 0 && fx < 1) flash = Math.max(flash, (k === n ? 0.3 : 0.46) * (1 - fx) ** 2);
+    }
+    out.top = { transform: `translateY(${((shut - 1) * 101).toFixed(2)}%)` };
+    out.bottom = { transform: `translateY(${((1 - shut) * 101).toFixed(2)}%)` };
+    out.flash = { opacity: +flash.toFixed(4) };
+    // podniesienie aparatu: widok gracza ledwie się przybliża przed pierwszym zdjęciem
+    out.base = { transform: `scale(${(1 + 0.014 * smooth(0, S.lead, ms)).toFixed(5)})`, opacity: ms < cut(0) + S.black ? 1 : 0 };
+    const settle = (k, len, amp, shift) => {
+      const c = cut(k), e = expoOut(clamp((ms - c - S.black) / len, 0, 1)), h = hop(k);
+      const vis = ms >= c + S.black * 0.5 && (k === n || ms < cut(k + 1) + S.black * 0.5);
+      return { transform: `translate(${(h.x * shift * VW * (1 - e)).toFixed(2)}px, ${(h.y * shift * VW * (1 - e)).toFixed(2)}px) scale(${(1 + amp * (1 - e)).toFixed(5)})`, opacity: vis ? 1 : 0 };
+    };
+    shootEls.show.forEach((_, k) => { out[`show.${k}`] = settle(k, P * 0.95, 0.07, 0.03); });
+    out.final = settle(n, S.final, 0.035, 0.018);
+    return out;
+  };
+  let shootDone = null;
+  function shoot() {
+    if (shootDone) return shootDone;
+    shootDone = (async () => {
+      if (!multi || closed) return;
+      const els = shootLayers();
+      const lay = (key) => {
+        const [name, idx] = key.split(".");
+        return name === "show" ? els.show[+idx] : name === "final" ? photo : name === "base" ? first : els[name];
+      };
+      const T = shootMs(shots.length, reduced), list = [];
+      for (const [k, kf] of Object.entries(sample(shootFrame, T))) { const el = lay(k); if (el) list.push(play(el, kf, { duration: T })); }
+      await Promise.all(list.map((a) => a.finished.catch(() => {})));
+      if (closed) return;
+      // stan końcowy: samo zdjęcie sceny na pełnym ekranie (jak po najeździe); reszta sesji zdjęta
+      for (const a of list) a.cancel();
+      photo.style.cssText = `${ABS}`;
+      for (const el of [first, ...els.show, els.flash, els.top, els.bottom]) el?.remove();
+    })();
+    return shootDone;
   }
 
   const REST_RZ = -2.2 * dir;
@@ -1306,8 +1592,8 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
   async function press() {
     if (pressDone) return pressDone;
     pressDone = (async () => {
-      // najazd rusza od razu (kompozytor), równolegle z rysowaniem strony
-      const pushed = push();
+      // najazd (albo sesja fotografa w trybie multi) rusza od razu (kompozytor), równolegle z rysowaniem strony
+      const pushed = multi ? shoot() : push();
       if (!(await ready) || closed) return;
       await pushed;
       if (closed) return;
@@ -1365,6 +1651,20 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
     const b = built;
     for (const a of anims) a.cancel();
     anims.clear();
+    if (phase === "shoot") {
+      // sesja fotografa: tylko w trybie multi i zanim strona przejęła zdjęcie sceny
+      if (!multi || b.rig.isConnected) return;
+      shootDone = Promise.resolve(); // press() po seek("shoot") nie odpali sesji drugi raz
+      const els = shootLayers(), f = shootFrame(t);
+      for (const [key, st] of Object.entries(f)) {
+        const [name, idx] = key.split(".");
+        const el = name === "show" ? els.show[+idx] : name === "final" ? photo : name === "base" ? first : els[name];
+        if (!el) continue;
+        if (st.transform) el.style.transform = st.transform;
+        if (st.opacity !== undefined) el.style.opacity = String(st.opacity);
+      }
+      return;
+    }
     if (phase === "push") {
       // najazd: tylko gdy był potrzebny i strona jeszcze nie przejęła zdjęcia
       if (!pushIn || b.rig.isConnected) return;

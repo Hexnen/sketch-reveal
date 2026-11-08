@@ -7,8 +7,8 @@
    zgłaszamy gotowość, czekamy na „tgo” i odlatujemy. Każdy klient fotografuje SWÓJ widok (własna kamera, mgła, tokeny). */
 import { MODULE_ID } from "./config.mjs";
 import {
-  DEFAULT_NEWSPAPER, HOLD_MS, NEWSPAPER_DEFAULT_TEXT, NEWSPAPER_LIMITS, NEWSPAPER_SLOTS, cameraEase, coverView, createNewspaper, ensurePaperFont,
-  newspaperText, photoCrop, prefersReducedMotion, REVEAL_ZOOM, revealCameraMs, sameRect, sanitizeNewspaper, usDate,
+  DEFAULT_NEWSPAPER, HOLD_MS, NEWSPAPER_DEFAULT_TEXT, NEWSPAPER_LIMITS, NEWSPAPER_SLOTS, SHOT_CAP, cameraEase, clusterRects, coverView, createNewspaper,
+  detailSpots, ensurePaperFont, newspaperText, photoCrop, prefersReducedMotion, REVEAL_ZOOM, revealCameraMs, sameRect, sanitizeNewspaper, shotFrame, usDate,
 } from "./fx/newspaper.mjs";
 import { awaitTransitionGo, prepareTransitionSync, transitionReadyOnly } from "./play.mjs";
 import { clientPerf, getPreset, resolveNewspaper } from "./store.mjs";
@@ -21,6 +21,8 @@ const SANS = "Signika"; // bezszeryfowy krój rdzenia Foundry — tytuły wspó�
 const COND = "Modesto Condensed"; // wąski krój rdzenia Foundry (700 = grotesk nagłówków dziennika z lat 30.; bez polskich znaków)
 const GUARD_MS = 45000;
 const CAPTURE_MAX_W = 1920;
+/** Zdjęcia grup (tryb multi): na stronie są małe, w sesji fotografa widać je chwilę na pełnym ekranie (pod ziarnem i błyskiem). */
+const SHOT_MAX_W = 1280;
 
 let cur = null;   // { np, overlay, sceneId, syncId, attached, preview, guard, closed, close() }
 let last = {};    // diagnostyka ostatniego przebiegu
@@ -48,9 +50,13 @@ function invalidateViewCaches() {
  * (dimensions.sceneRect), możliwie blisko tego, co gracz widział. Gdy na ekranie było widać tło poza sceną, scena jest
  * renderowana drugi raz z kamerą ustawioną na ten kadr (pełna rozdzielczość, nie powiększony zrzut), a pierwszy zrzut
  * (`cover` — dokładnie to, co było na ekranie) służy do płynnego najazdu kamery. Kamera wraca do stanu sprzed zrzutu.
- * Zwraca { photo, cover|null, crop (px ekranu)|null, bg }.
+ *
+ * `shots` = wygląd strony („classic” / „modern”) → tryb multi: dodatkowo zdjęcia grup tokenów widocznych dla TEGO
+ * klienta (captureShots), w liczbie mieszczącej się na stronie. W trybie multi zdjęcie sceny i zdjęcia grup są renderowane
+ * BEZ ukrytych tokenów (MG widzi je półprzezroczyste — na zdjęciach gazety nie ma ich nikt; `cover` = ekran jak był).
+ * Zwraca { photo, cover|null, crop (px ekranu)|null, bg, shots|null }.
  */
-export function captureView() {
+export function captureView({ shots: shotStyle = null, safe = null } = {}) {
   const r = canvas?.app?.renderer;
   if (!r || !canvas.stage) throw new Error("no canvas");
   const { width, height } = r.screen;
@@ -62,8 +68,8 @@ export function captureView() {
     bg = b?.backgroundColor?.toHex?.() ?? (Number.isFinite(b?.color) ? `#${b.color.toString(16).padStart(6, "0")}` : null);
   } catch { /* */ }
   if (!/^#[0-9a-f]{6}$/i.test(bg ?? "")) bg = /^#[0-9a-f]{6}$/i.test(canvas.scene?.backgroundColor ?? "") ? canvas.scene.backgroundColor : "#000";
-  const shot = () => {
-    const rt = PIXI.RenderTexture.create({ width, height, resolution: res });
+  const shot = (resolution = res) => {
+    const rt = PIXI.RenderTexture.create({ width, height, resolution });
     const rootVisible = canvas.root?.visible;
     try {
       if (canvas.root) canvas.root.visible = true;
@@ -82,29 +88,110 @@ export function captureView() {
   const cover = shot();
   const st = canvas.stage, sr = canvas.dimensions?.sceneRect;
   const scale = st.scale.x;
-  if (!sr || !(sr.width > 0) || !(sr.height > 0) || !(scale > 0)) return { photo: cover, cover: null, crop: null, bg };
+  if (!sr || !(sr.width > 0) || !(sr.height > 0) || !(scale > 0)) return { photo: cover, cover: null, crop: null, bg, shots: null };
   // widok w jednostkach świata (pivot = punkt świata w miejscu stage.position)
   const view = { x: st.pivot.x - st.position.x / scale, y: st.pivot.y - st.position.y / scale, w: width / scale, h: height / scale };
-  const c = photoCrop(view, { x: sr.x, y: sr.y, w: sr.width, h: sr.height }, width / height);
+  const scene = { x: sr.x, y: sr.y, w: sr.width, h: sr.height };
+  const c = photoCrop(view, scene, width / height);
   const crop = { x: (c.x - view.x) * scale, y: (c.y - view.y) * scale, w: c.w * scale, h: c.h * scale };
-  if (sameRect(crop, { x: 0, y: 0, w: width, h: height }, 1)) return { photo: cover, cover: null, crop: null, bg };
-  // drugi render: kamera na kadrze (bez Canvas#pan — żadnych hooków ani zapisu pozycji widoku sceny)
+  const needCrop = !sameRect(crop, { x: 0, y: 0, w: width, h: height }, 1);
+  if (!needCrop && !shotStyle) return { photo: cover, cover: null, crop: null, bg, shots: null };
+  // tryb multi: ukryte tokeny (u MG rysowane półprzezroczyste) znikają na czas renderów — kontener tokenu i jego siatka
+  // w grupie primary; render jest synchroniczny, więc nic pomiędzy nie odświeży widoczności. Na końcu stan wraca.
+  const veiled = [];
+  if (shotStyle) for (const t of canvas.tokens?.placeables ?? []) {
+    if (!t?.document?.hidden || t.destroyed) continue;
+    veiled.push([t, t.visible, t.mesh, t.mesh?.visible]);
+    t.visible = false;
+    if (t.mesh) t.mesh.visible = false;
+  }
+  const multiPhoto = shotStyle && veiled.some(([, was, , meshWas]) => was || meshWas);
+  // kolejne rendery: kamera na kadrze (bez Canvas#pan — żadnych hooków ani zapisu pozycji widoku sceny), na końcu powrót
   const saved = { px: st.pivot.x, py: st.pivot.y, sx: st.scale.x, sy: st.scale.y, x: st.position.x, y: st.position.y };
-  let photo;
-  try {
-    const k = width / c.w;
-    st.pivot.set(c.x + c.w / 2, c.y + c.h / 2);
+  const renderAt = (f, resolution) => {
+    const k = width / f.w;
+    st.pivot.set(f.x + f.w / 2, f.y + f.h / 2);
     st.scale.set(k, k);
     st.position.set(width / 2, height / 2);
     invalidateViewCaches();
-    photo = shot();
-  } catch (e) {
-    console.warn(`${MODULE_ID} | gazeta: kadr bez tła nieudany, zostaje zwykły zrzut`, e);
+    return shot(resolution);
+  };
+  let photo = null, shots = null;
+  try {
+    if (needCrop || multiPhoto) {
+      try { photo = renderAt(c, res); } catch (e) { console.warn(`${MODULE_ID} | gazeta: kadr bez tła nieudany, zostaje zwykły zrzut`, e); }
+    }
+    if (shotStyle) {
+      const outW = Math.min(SHOT_MAX_W, width * (globalThis.devicePixelRatio || 1));
+      // wolna od UI część ekranu (0…1) — tam ląduje grupa na pełnoekranowym zdjęciu sesji
+      const free = safe ? { x: safe.left / width, y: (safe.top ?? 0) / height, w: 1 - (safe.left + safe.right) / width, h: 1 - ((safe.top ?? 0) + safe.bottom) / height } : undefined;
+      try { shots = captureShots(shotStyle, { est: c, scene, aspect: width / height, establishing: photo ?? cover, renderAt, outW, width, safe: free }); }
+      catch (e) { console.warn(`${MODULE_ID} | gazeta: zdjęcia grup nieudane, zostaje jedno zdjęcie`, e); shots = null; }
+    }
   } finally {
     st.pivot.set(saved.px, saved.py); st.scale.set(saved.sx, saved.sy); st.position.set(saved.x, saved.y);
+    for (const [t, was, mesh, meshWas] of veiled) {
+      if (!t.destroyed) t.visible = was;
+      if (mesh && !mesh.destroyed) mesh.visible = meshWas;
+    }
     invalidateViewCaches();
   }
-  return photo ? { photo, cover, crop, bg } : { photo: cover, cover: null, crop: null, bg };
+  // bez potrzeby kadru zdjęcie multi to ten sam widok co ekran — najazdu nie ma (`crop` = cały ekran)
+  if (photo && !needCrop) return { photo, cover: null, crop: null, bg, shots };
+  return photo ? { photo, cover, crop, bg, shots } : { photo: cover, cover: null, crop: null, bg, shots };
+}
+
+/**
+ * Token widoczny dla TEGO klienta w chwili zrzutu: `visible` liczy rdzeń v14 (Token#isVisible: ukryte tylko dla MG,
+ * wizja tokenów, mgła, poziomy sceny), siatka (mesh) faktycznie rysowana. Ukrytych tokenów nie fotografujemy także
+ * u MG (MG widzi je półprzezroczyste, ale to nie jest „zdarzenie” dla gazety). Podglądy przeciągania — nigdy.
+ */
+function seenToken(t) {
+  if (!t || t.destroyed || t.isPreview || !t.visible || t.renderable === false) return false;
+  if (t.document?.hidden) return false;
+  if (t.mesh && (!t.mesh.visible || t.mesh.worldAlpha === 0)) return false;
+  return (t.document?.alpha ?? 1) > 0.05;
+}
+
+/**
+ * Tryb multi: fotograf. Tokeny widoczne dla tego klienta (seenToken) łączą się w grupy po bliskości (clusterRects: odstęp
+ * ≤ 2,5 pola siatki = jedna grupa; najwyżej SHOT_CAP[wygląd] grup, od najliczniejszej). Każda grupa → kadr w proporcjach
+ * ekranu z marginesem, w całości w obrazie sceny (shotFrame), render sceny z kamerą na tym kadrze. Grupa, której kadr to
+ * praktycznie całe zdjęcie sceny, odpada (byłaby powtórzeniem). Bez grup — dwa miejsca z największą ilością szczegółów
+ * na zdjęciu sceny (detailSpots), też jako osobne rendery (ostre, nie powiększony zrzut).
+ * Zwraca [{image, focus, aspect, pos, kind, count, ms}] od najważniejszego.
+ */
+function captureShots(style, { est, scene, aspect, establishing, renderAt, outW, width, safe }) {
+  const cap = SHOT_CAP[style] ?? SHOT_CAP.classic;
+  const grid = canvas.dimensions?.size || canvas.grid?.size || 100;
+  const rects = [];
+  for (const t of canvas.tokens?.placeables ?? []) {
+    if (!seenToken(t)) continue;
+    const b = t.bounds;
+    const x0 = Math.max(b.x, scene.x), y0 = Math.max(b.y, scene.y), x1 = Math.min(b.x + b.width, scene.x + scene.w), y1 = Math.min(b.y + b.height, scene.y + scene.h);
+    if (x1 - x0 > 1 && y1 - y0 > 1) rects.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+  }
+  // plan średni: szerokość kadru ≥ 4,5 pola i ≥ tyle, żeby mapa nie była powiększona ponad 2× (rozmyta tekstura)
+  const minW = Math.max(4.5 * grid, outW / 2);
+  // kadr praktycznie równy zdjęciu sceny (≥ 80 % szerokości) odpada — byłby powtórzeniem
+  const framed = (gs) => gs.map((g) => ({ g, s: shotFrame(g.rect, scene, aspect, { pad: 0.6 * grid, minW, safe }) })).filter(({ s }) => s.frame.w < 0.8 * est.w);
+  let picked = framed(clusterRects(rects, 2.5 * grid, cap));
+  // dociąganie grup (gdy jest ich za dużo) dało za szeroki kadr → najliczniejsze grupy bez dociągania
+  if (picked.length < cap) { const loose = framed(clusterRects(rects, 2.5 * grid, Infinity)).slice(0, cap); if (loose.length > picked.length) picked = loose; }
+  const subjects = picked.map(({ g, s }) => ({ ...s, kind: "group", count: g.count, aspect: (s.focus.w * s.frame.w) / (s.focus.h * s.frame.h) }));
+  if (!subjects.length) {
+    for (const n of detailSpots(establishing, Math.min(cap, 2))) {
+      const frame = { x: est.x + n.x * est.w, y: est.y + n.y * est.h, w: n.w * est.w, h: (n.w * est.w) / aspect };
+      subjects.push({ frame, focus: { x: 0.15, y: 0.15, w: 0.7, h: 0.7 }, kind: "detail", count: 0, aspect });
+    }
+  }
+  const resolution = Math.min(globalThis.devicePixelRatio || 1, outW / width);
+  return subjects.map((s) => {
+    const t0 = performance.now();
+    const image = renderAt(s.frame, resolution);
+    return { image, focus: s.focus, aspect: s.aspect, kind: s.kind, count: s.count, ms: Math.round(performance.now() - t0),
+      pos: { x: (s.frame.x + s.frame.w / 2 - est.x) / est.w, y: (s.frame.y + s.frame.h / 2 - est.y) / est.h } };
+  });
 }
 
 /**
@@ -146,14 +233,15 @@ function stage(data, { sceneId = null, preview = false } = {}) {
   cancelNewspaper();
   const t0 = performance.now();
   let shot;
-  try { shot = captureView(); } catch (e) { console.warn(`${MODULE_ID} | gazeta: zrzut płótna nieudany`, e); return null; }
-  const { photo, cover, crop, bg } = shot;
+  const b = uiBounds();
+  try { shot = captureView({ shots: data.shots === "multi" ? data.style : null, safe: { left: b.left, right: b.right, bottom: b.bottom, top: 16 } }); }
+  catch (e) { console.warn(`${MODULE_ID} | gazeta: zrzut płótna nieudany`, e); return null; }
+  const { photo, cover, crop, bg, shots } = shot;
   const captureMs = performance.now() - t0;
   const overlay = makeOverlay();
   const perf = clientPerf();
-  const b = uiBounds();
   const np = createNewspaper({
-    host: overlay, photo, cover, crop, coverBg: bg, data, family: FONT, sansFamily: SANS, condFamily: COND,
+    host: overlay, photo, cover, crop, coverBg: bg, data, shots, family: FONT, sansFamily: SANS, condFamily: COND,
     reduced: prefersReducedMotion(),
     // lżejsza wersja (bez smug, mniejsza rozdzielczość strony) przy lekkich animacjach albo obniżonym podglądzie
     lite: perf.liteTitle || perf.preview !== "full",
@@ -170,7 +258,9 @@ function stage(data, { sceneId = null, preview = false } = {}) {
   };
   // zabezpieczenie: scena nie dojechała do canvasReady (błąd rysowania) — nie zostawiaj zasłony na zawsze
   t.guard = setTimeout(() => { if (cur === t && !t.running) t.close(false); }, GUARD_MS);
-  last = { captureMs: Math.round(captureMs), photo: `${photo.width}×${photo.height}`, pushIn: np.stats.pushIn, crop: crop && { x: Math.round(crop.x), y: Math.round(crop.y), w: Math.round(crop.w), h: Math.round(crop.h) }, sceneId, preview, reduced: np.stats.reduced, lite: np.stats.lite };
+  last = { captureMs: Math.round(captureMs), photo: `${photo.width}×${photo.height}`, pushIn: np.stats.pushIn, crop: crop && { x: Math.round(crop.x), y: Math.round(crop.y), w: Math.round(crop.w), h: Math.round(crop.h) }, sceneId, preview, reduced: np.stats.reduced, lite: np.stats.lite,
+    // tryb multi: co sfotografowano (rodzaj, liczba tokenów, czas renderu, rozmiar) i ile trwa sesja
+    shots: shots?.map((s) => ({ kind: s.kind, count: s.count, ms: s.ms, size: `${s.image.width}×${s.image.height}` })) ?? null, shootMs: np.stats.shootMs };
   np.ready.then((ok) => { last.buildMs = np.stats.buildMs; last.pageW = np.stats.pageW; if (!ok) t.close(true); });
   t.pressed = np.press().then(() => new Promise((r) => setTimeout(r, HOLD_MS)));
   cur = t;
@@ -302,7 +392,7 @@ const select = (name, v, opts) =>
  * `prefix` — prefiks nazw pól („newspaper” w edytorze, „flags.sketch-reveal.newspaper” w zakładce sceny), `values` — wpisany
  * tekst, `ph` — tekst, który wydrukuje się przy pustym polu (szary), `style` — wygląd (rubryki nagłówków listy).
  */
-export function newspaperDraftHtml({ prefix, values = {}, ph, style = "classic", kickerPh = "", accent = DEFAULT_NEWSPAPER.accent, legend, hint = "", extra = "" }) {
+export function newspaperDraftHtml({ prefix, values = {}, ph, style = "classic", kickerPh = "", accent = DEFAULT_NEWSPAPER.accent, legend, hint = "", extra = "", shotsLabel = null }) {
   const Lm = NEWSPAPER_LIMITS;
   const uid = foundry.utils.randomID(6);
   let k = 0;
@@ -319,6 +409,8 @@ export function newspaperDraftHtml({ prefix, values = {}, ph, style = "classic",
   <fieldset class="sr-newspaper-form sr-np-draft" data-sr="newspaper-draft" data-style="${esc(style)}" style="--sr-accent: ${esc(accent)}"${extra}>
     <legend>${esc(legend)}</legend>
     ${hint ? `<p class="hint">${esc(hint)}</p>` : ""}
+    ${shotsLabel ? group(L("Field.Shots"), `<select name="${prefix}.shots" data-np="shots">${[["", shotsLabel], ["single", L("Shots.single")], ["multi", L("Shots.multi")]]
+    .map(([v, lab]) => `<option value="${v}"${(values.shots ?? "") === v ? " selected" : ""}>${esc(lab)}</option>`).join("")}</select>`, L("Hint.SceneShots")) : ""}
     <div class="sr-np-sheet">
       ${row("masthead", L("NewsField.masthead"), field("masthead", values.masthead ?? "", ph.masthead, Lm.masthead))}
       ${row("place", L("NewsField.place"), field("place", values.place ?? "", ph.place, Lm.place))}
@@ -364,6 +456,7 @@ export function bindNewspaperDraft(root, resolve = null) {
     const slots = NEWSPAPER_SLOTS[r.style] ?? NEWSPAPER_SLOTS.classic;
     for (const el of draft.querySelectorAll("[data-np]")) {
       const key = el.dataset.np, m = /^stories\.(\d+)$/.exec(key);
+      if (el.tagName === "SELECT") { if (r.shotsLabel && el.options[0]) el.options[0].textContent = r.shotsLabel; continue; }
       if (m) {
         el.placeholder = r.ph.stories[+m[1]] ?? "";
         const lab = draft.querySelector(`label[for="${el.id}"]`);
@@ -388,7 +481,8 @@ export function bindNewspaperForm(root) {
 export function sceneDraftPlaceholders(presetNewspaper) {
   const n = sanitizeNewspaper(presetNewspaper);
   const t = newspaperText(n);
-  return { style: n.style, accent: n.accent, ph: { ...t, date: n.date || usDate() }, kickerPh: n.kicker || L("NewsDraft.NoKicker") };
+  return { style: n.style, accent: n.accent, ph: { ...t, date: n.date || usDate() }, kickerPh: n.kicker || L("NewsDraft.NoKicker"),
+    shotsLabel: L("Shots.AsPreset", { mode: L(`Shots.${n.shots}`) }) };
 }
 
 /** HTML sekcji gazety (pola pod prefiksem "newspaper."; marker data-sr="newspaper" mówi edytorowi, że sekcja jest w DOM). */
@@ -401,6 +495,7 @@ export function newspaperFormHtml(raw) {
     ${group(L("Field.PaperStyle"), select("newspaper.style", n.style, [["classic", L("PaperStyle.classic")], ["modern", L("PaperStyle.modern")]]), L("Hint.PaperStyle"))}
     ${group(L("Field.PaperColor"), `<input type="color" name="newspaper.paper" value="${esc(n.paper)}">`, "", ' data-showif="newspaper.style" data-showif-is="classic"')}
     ${group(L("Field.Accent"), `<input type="color" name="newspaper.accent" value="${esc(n.accent)}">`, L("Hint.PaperAccent"))}
+    ${group(L("Field.Shots"), select("newspaper.shots", n.shots, [["single", L("Shots.single")], ["multi", L("Shots.multi")]]), L("Hint.Shots"))}
   </fieldset>
   ${newspaperDraftHtml({ prefix: "newspaper", values: n, ph: presetPh(n.style), style: n.style, kickerPh: L("NewsDraft.NoKicker"), accent: n.accent, legend: L("NewsDraft.Legend"), hint: L("NewsDraft.Hint") })}
   <fieldset class="sr-newspaper-form"><legend>${esc(L("Section.Spin"))}</legend>
