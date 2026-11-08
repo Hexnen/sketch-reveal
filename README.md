@@ -71,8 +71,13 @@ presetu dla tej jednej sceny (pole puste = tekst presetu, pokazany na szaro); wy
 z presetu. Przycisk podglądu uwzględnia niezapisane zmiany.
 
 **Fotograf: sesja zdjęciowa (tryb multi)** — opcja presetu (pole „Fotograf”; zakładka sceny może ją nadpisać,
-puste = jak w presecie). Zanim strona się uformuje, fotograf prasowy robi serię zdjęć: migawka (dwie czarne zasłony
-na 25–80 ms), błysk lampy, krótkie dojście kadru, a na końcu zdjęcie całej sceny, które staje się zdjęciem głównym.
+puste = jak w presecie). Zanim strona się uformuje, fotograf prasowy robi serię zdjęć. Kamera to jeden „świat”
+(ekran gracza, zdjęcie sceny i ostre rendery grup na swoich kadrach), więc między zdjęciami jest prawdziwy ruch:
+szybki przerzut z oddechem (lekki odjazd w połowie). Na każdej grupie celownik (4 narożniki) łapie cel i zaciska się,
+błyska lampa (ciepła plama światła na grupie, nie biały ekran), klatka staje się odbitką z papierowym marginesem
+(klasyczna: raster druku, współczesna: barwny wydruk), na 90 ms zamiera, po czym odlatuje na stos w rogu i po drodze
+przycina się do proporcji swojego miejsca na stronie. Na końcu zdjęcie całej sceny (narożniki na ramce kadru), które
+staje się zdjęciem głównym; gdy strona ląduje, odbitki ze stosu lecą dokładnie w swoje miejsca na stronie i tam gasną.
 Zdjęcia robi każdy klient sam, z tego, co sam widzi:
 
 - tokeny widoczne dla tego klienta (`Token#visible` z rdzenia: wizja, mgła, poziomy) łączą się w grupy po bliskości
@@ -89,8 +94,13 @@ Zdjęcia robi każdy klient sam, z tego, co sam widzi:
 Na stronie: klasyczna — zdjęcie w bocznej szpalcie („Another view of the scene.”) i zdjęcie dolnego artykułu (dwuszpaltowe,
 gdy jest miejsce, inaczej jednoszpaltowe); współczesna — zapowiedzi stron w winiecie i karty „More top stories”. Zdjęcie
 trafia do miejsca o najbliższych proporcjach; puste miejsca dostają wycinek zdjęcia sceny jak w trybie jednego zdjęcia.
-Sesja trwa 160 ms + n × 440 ms (n ≤ 2) albo n × 360 ms (n > 2) + 380 ms; przy ograniczonym ruchu są to spokojne
-przenikania bez migawki i błysku (120 ms + n × 400 ms + 260 ms). Tryb jednego zdjęcia (domyślny) działa jak dotąd.
+Sesja trwa 220 ms + n × 440 ms (n ≤ 2) albo n × 380 ms (n > 2) + 480 ms (klasyczna z 2 zdjęciami 1,58 s, współczesna
+z 4 — 2,22 s). Błyski: najwyżej 3 w dowolnej sekundzie (`flashPlan`, WCAG 2.3.1), każdy lokalny (radialna plama,
+szczyt 0,5 w środku, 25 ms narastania, 210 ms wygasania); po ostatnim zdjęciu faza strony nie dokłada drugiego błysku.
+Rastry odbitek liczone są przed synchronizacją (w `ready`), w trakcie sesji nic ciężkiego się nie maluje. Przy
+ograniczonym ruchu: spokojne przenikania pełnoekranowych zdjęć grup, nieruchomy celownik, odbitki pojawiają się na
+stosie i gasną razem ze zrzutem — bez ruchu kamery i bez błysku (120 ms + n × 400 ms + 260 ms). Tryb jednego zdjęcia
+(domyślny) działa jak dotąd.
 
 Test bez Foundry: `tools/harness-newspaper.html` (zestawy tekstów: domyślne, długie, jednowyrazowe, polskie;
 „strona w 1:1” pokazuje samą stronę do czytania; „fotograf” — multi z atrapami tokenów: 4 grupy, samotny token

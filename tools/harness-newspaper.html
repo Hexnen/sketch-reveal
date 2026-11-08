@@ -226,7 +226,9 @@ function captureShots(style, est, establishing) {
     image.width = Math.round(outW); image.height = Math.round(outW / aspect);
     drawScene(image.getContext("2d"), image.width, image.height, oldScene.i, scene, { x: s.frame.x, y: s.frame.y, k: image.width / s.frame.w }, PAD_BG, true);
     return { image, focus: s.focus, aspect: s.aspect, kind: s.kind, count: s.count, ms: Math.round(performance.now() - t0),
-      pos: { x: (s.frame.x + s.frame.w / 2 - est.x) / est.w, y: (s.frame.y + s.frame.h / 2 - est.y) / est.h } };
+      pos: { x: (s.frame.x + s.frame.w / 2 - est.x) / est.w, y: (s.frame.y + s.frame.h / 2 - est.y) / est.h },
+      // kadr w układzie zdjęcia sceny (0…1) — kamera sesji fotografa przerzuca się dokładnie na niego
+      rect: { x: (s.frame.x - est.x) / est.w, y: (s.frame.y - est.y) / est.h, w: s.frame.w / est.w, h: s.frame.h / est.h } };
   });
 }
 /**

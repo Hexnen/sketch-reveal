@@ -159,7 +159,7 @@ function seenToken(t) {
  * ekranu z marginesem, w całości w obrazie sceny (shotFrame), render sceny z kamerą na tym kadrze. Grupa, której kadr to
  * praktycznie całe zdjęcie sceny, odpada (byłaby powtórzeniem). Bez grup — dwa miejsca z największą ilością szczegółów
  * na zdjęciu sceny (detailSpots), też jako osobne rendery (ostre, nie powiększony zrzut).
- * Zwraca [{image, focus, aspect, pos, kind, count, ms}] od najważniejszego.
+ * Zwraca [{image, focus, aspect, pos, rect, kind, count, ms}] od najważniejszego.
  */
 function captureShots(style, { est, scene, aspect, establishing, renderAt, outW, width, safe }) {
   const cap = SHOT_CAP[style] ?? SHOT_CAP.classic;
@@ -190,7 +190,9 @@ function captureShots(style, { est, scene, aspect, establishing, renderAt, outW,
     const t0 = performance.now();
     const image = renderAt(s.frame, resolution);
     return { image, focus: s.focus, aspect: s.aspect, kind: s.kind, count: s.count, ms: Math.round(performance.now() - t0),
-      pos: { x: (s.frame.x + s.frame.w / 2 - est.x) / est.w, y: (s.frame.y + s.frame.h / 2 - est.y) / est.h } };
+      pos: { x: (s.frame.x + s.frame.w / 2 - est.x) / est.w, y: (s.frame.y + s.frame.h / 2 - est.y) / est.h },
+      // kadr w układzie zdjęcia sceny (0…1) — kamera sesji fotografa przerzuca się dokładnie na niego
+      rect: { x: (s.frame.x - est.x) / est.w, y: (s.frame.y - est.y) / est.h, w: s.frame.w / est.w, h: s.frame.h / est.h } };
   });
 }
 

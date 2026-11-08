@@ -64,12 +64,25 @@ export const PRESS_MS = 1450, HOLD_MS = 450, CALM_IN_MS = 650, CALM_OUT_MS = 900
 /** Najazd kamery na samą mapę, zanim kadr stanie się zdjęciem (gdy na ekranie było widać tło poza sceną). */
 export const PUSH_MS = 650;
 /**
- * Sesja fotografa (tryb multi), ms: chwila na podniesienie aparatu, na każdą grupę (mniej grup = dłużej), osiadanie na
- * końcowym zdjęciu sceny. Migawka zamyka się na 55 ms przed cięciem, czerń 25 ms, otwiera przez 80 ms.
- * Ograniczony ruch: spokojne przenikania (bez migawki, błysku i ruchu kamery).
+ * Sesja fotografa (tryb multi), ms: `lead` — podniesienie aparatu (celownik łapie pierwszą grupę); `step(n)` — na każdą
+ * grupę (przerzut kamery `aim`·step, zaciśnięcie ostrości `lock`·step, wyzwolenie; klatka stoi jako odbitka `freeze` ms,
+ * potem odlatuje, gdy kamera już szuka następnej); `final` — odjazd na całe zdjęcie sceny (`finalAim`), wyzwolenie po `finalFire`, chwila na kadr.
+ * `toss` — lot odbitki na stos. Krok ≥ 340 ms i jeden błysk na zdjęcie (flashPlan) = najwyżej 3 błyski na sekundę.
+ * Ograniczony ruch: spokojne przenikania (bez kamery, błysku i lotów).
  */
-export const SHOOT = Object.freeze({ lead: 160, step: (n) => (n <= 2 ? 440 : 360), final: 380, close: 55, black: 25, open: 80, calmLead: 120, calmStep: 400, calmFade: 180, calmFinal: 260 });
+export const SHOOT = Object.freeze({ lead: 220, step: (n) => (n <= 2 ? 440 : 380), aim: 0.5, lock: 0.14, freeze: 90, final: 480, finalAim: 290, finalFire: 310, toss: 540,
+  calmLead: 120, calmStep: 400, calmFade: 180, calmFinal: 260 });
 export const shootMs = (n, reduced = false) => (reduced ? SHOOT.calmLead + n * SHOOT.calmStep + SHOOT.calmFinal : SHOOT.lead + n * SHOOT.step(n) + SHOOT.final);
+/**
+ * Bezpieczeństwo fotosensytywne (WCAG 2.3.1: najwyżej 3 błyski w dowolnej sekundzie): dla rosnących czasów błysków (ms)
+ * zwraca, które wolno odpalić — błysk, który byłby czwartym w oknie `win`, zostaje pominięty (zdjęcie bez flesza).
+ */
+export function flashPlan(times, win = 1000, max = 3) {
+  const kept = [];
+  return times.map((t) => { if (kept.filter((k) => t - k < win).length >= max) return false; kept.push(t); return true; });
+}
+/** Kadr zdjęcia grupy w układzie zdjęcia sceny (0…1); stare wywołania bez `rect` — kadr wokół `pos`. */
+const shotRect = (s) => s.rect ?? { x: (s.pos?.x ?? 0.5) - 0.2, y: (s.pos?.y ?? 0.5) - 0.2, w: 0.4, h: 0.4 };
 /** Odsłona nowej mapy: kamera startuje o tyle bliżej i osiada na kadrze bez tła poza sceną (czas = odlot + zapas). */
 export const REVEAL_ZOOM = 1.12, REVEAL_TAIL_MS = 600;
 export const revealCameraMs = (spinSec) => Math.round(spinSec * 1000 + REVEAL_TAIL_MS);
@@ -560,6 +573,8 @@ export function paintPage({ W, photo, aspect, data, seed = 1, fonts = {}, lite =
   const r = mulberry(seed);
   // tryb multi: zdjęcia grup w miejscach „lower” (2 szpalty pod złożeniem) i „side” (1 szpalta nad artykułem bocznym)
   const slot = shots?.length ? assignShots(shots, "classic") : null;
+  /** Gdzie na stronie stanęło każde zdjęcie grupy: [{i (indeks w `shots`), x, y, w, h}] w px płótna strony. */
+  const shotRects = [];
   const T = newspaperText(data, now);
   const u = W / 1000, H = Math.round(W * 1.42);
   const c = mk(W, H), g = c.getContext("2d");
@@ -755,6 +770,7 @@ export function paintPage({ W, photo, aspect, data, seed = 1, fonts = {}, lite =
   if (slot?.side) {
     // jednoszpaltowe zdjęcie nad artykułem bocznym (jak „cut” w prasie z epoki) + krótki podpis kursywą
     const ch = Math.round(colW * 1.22), cr = { x: k5, y: bodyTop, w: colW, h: ch };
+    shotRects.push({ i: shots.indexOf(slot.side), ...cr });
     halftone(g, cropCanvas(slot.side.image, slot.side.focus, colW / ch), cr, (lite ? 3.3 : 2.7) * cssScale, ink, data.paper);
     g.lineWidth = 0.8 * u; g.strokeRect(cr.x, cr.y, cr.w, cr.h);
     const cap = fit("Another view of the scene.", { face: (s) => ({ font: SER(400, s, "", true), sx: 1 }), maxW: colW, maxLines: 2, max: 8.4 * u, min: 7 * u });
@@ -795,6 +811,7 @@ export function paintPage({ W, photo, aspect, data, seed = 1, fonts = {}, lite =
   if (slot?.lower && yFoot - 18 * u - yl > h2 + 26 * u + 4 * lead) {
     // tryb multi: zdjęcie grupy na dwie szpalty pod złożeniem (proza obu szpalt zaczyna się pod podpisem)
     const cr = { x: colX(0), y: yl + 2 * u, w: w2, h: h2 };
+    shotRects.push({ i: shots.indexOf(slot.lower), ...cr });
     halftone(g, cropCanvas(slot.lower.image, slot.lower.focus, w2 / h2), cr, (lite ? 3.3 : 2.7) * cssScale, ink, data.paper);
     g.lineWidth = 0.8 * u; g.strokeRect(cr.x, cr.y, cr.w, cr.h);
     g.font = SER(400, 7.6 * u); say("STAFF PHOTO", cr.x + w2, cr.y + h2 + 9.5 * u, 1, "right");
@@ -814,6 +831,7 @@ export function paintPage({ W, photo, aspect, data, seed = 1, fonts = {}, lite =
       cut.getContext("2d").drawImage(pc, -(pc.width - cut.width) / 2, -(pc.height - cut.height) / 2);
     }
     const cr = { x: colX(0), y: yl + 2 * u, w: colW, h: ch };
+    if (slot?.lower) shotRects.push({ i: shots.indexOf(slot.lower), ...cr });
     halftone(g, cut, cr, (lite ? 3.3 : 2.7) * cssScale, ink, data.paper);
     g.lineWidth = 0.8 * u; g.strokeRect(cr.x, cr.y, cr.w, cr.h);
     g.font = SER(400, 8.4 * u, "", true);
@@ -868,7 +886,7 @@ export function paintPage({ W, photo, aspect, data, seed = 1, fonts = {}, lite =
   }
 
   paperFinish(g, W, H, u, r, data.paper, lite);
-  return { canvas: c, photoRect, H };
+  return { canvas: c, photoRect, H, shotRects };
 }
 
 /* ================================================================ strona współczesna (amerykański tabloid w kolorze) */
@@ -885,6 +903,7 @@ export function paintModern({ W, photo, aspect, data, seed = 1, fonts = {}, lite
   const r = mulberry(seed ^ 0x9e3779b9);
   // tryb multi: zdjęcia grup w zapowiedziach (flaga) i kartach u dołu; miejsca bez zdjęcia — wycinki zdjęcia sceny jak dotąd
   const slot = shots?.length ? assignShots(shots, "modern") : null;
+  const shotRects = [];
   const T = newspaperText(data, now);
   const u = W / 1000, H = Math.round(W * 1.42);
   const c = mk(W, H), g = c.getContext("2d");
@@ -914,6 +933,7 @@ export function paintModern({ W, photo, aspect, data, seed = 1, fonts = {}, lite
   /** Zdjęcie grupy (tryb multi) w prostokącie: wycinek wokół grupy w proporcjach miejsca; bez zdjęcia — `fallback()`. */
   const shotIn = (shot, x, y, w, h, fallback) => {
     if (!shot) return fallback();
+    shotRects.push({ i: shots.indexOf(shot), x, y, w, h });
     const s = focusCrop(shot.image.width, shot.image.height, shot.focus, w / h);
     g.save();
     g.filter = "saturate(1.18) contrast(1.06)";
@@ -1091,7 +1111,7 @@ export function paintModern({ W, photo, aspect, data, seed = 1, fonts = {}, lite
   }
 
   paperFinish(g, W, H, u, r, paper, lite, false);
-  return { canvas: c, photoRect, H };
+  return { canvas: c, photoRect, H, shotRects };
 }
 
 /**
@@ -1284,6 +1304,8 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
   flat.append(first);
   root.append(flat);
 
+  // wolny od UI obszar ekranu (strona ląduje na jego środku, stos odbitek w jego prawym dolnym rogu)
+  const safeA = { left: 16, right: 16, top: 16, bottom: 16, ...(safe ?? {}) };
   const stats = { reduced: !!reduced, lite: !!lite, buildMs: 0, pageW: 0, photoW: photo.width, photoH: photo.height, pushIn, crop: pushIn ? { ...crop } : null,
     multi, shots: multi ? shots.length : 0, shootMs: multi ? shootMs(shots.length, reduced) : 0 };
   const anims = new Set();
@@ -1304,7 +1326,6 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
     await frame();
     if (closed) return false;
     const t0 = performance.now();
-    const safeA = { left: 16, right: 16, top: 16, bottom: 16, ...(safe ?? {}) };
     const aw = Math.max(200, VW - safeA.left - safeA.right), ah = Math.max(200, VH - safeA.top - safeA.bottom);
     // strona (proporcje 1:1,42) mieści się w 86 % wolnego obszaru
     let restH = ah * 0.86, restW = restH / 1.42;
@@ -1317,6 +1338,15 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
     const page = modern
       ? paintModern({ W, photo, aspect: photo.width / photo.height, data: d, seed, fonts, lite, shots: pageShots })
       : paintPage({ W, photo, aspect: photo.width / photo.height, data: d, seed, fonts, lite, cssScale: W / restW, shots: pageShots });
+    // odbitki sesji fotografa liczone tu, przed synchronizacją (klasyczna: raster druku, współczesna: barwny wydruk) —
+    // w trakcie sesji nic ciężkiego się nie maluje
+    if (multi) prints = shots.map((s) => {
+      const c = mk(printW, printH), g = c.getContext("2d");
+      if (modern) { g.filter = "saturate(1.18) contrast(1.06)"; g.drawImage(s.image, 0, 0, printW, printH); g.filter = "none"; }
+      else halftone(g, s.image, { x: 0, y: 0, w: printW, h: printH }, lite ? 2.5 : 2.8, inkFor(d.paper), d.paper);
+      g.getImageData(0, 0, 1, 1); // wymuś wykonanie rysowania teraz (płótno GPU rysuje leniwie — inaczej koszt spadłby na start sesji)
+      return c;
+    });
     stats.pageW = W; stats.buildMs = Math.round(performance.now() - t0);
 
     // tło: stara scena mocno rozmyta i przyciemniona (głębia ostrości), statyczne
@@ -1407,95 +1437,307 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
     return pushDone;
   }
 
-  /* ---- sesja fotografa (tryb multi, zamiast najazdu): z widoku gracza cięcia migawką na kolejne grupy, na końcu zdjęcie
-     sceny (to, które staje się zdjęciem głównym strony). Każde cięcie ukrywa zamknięta migawka; po otwarciu błysk flesza
-     i krótkie osiadanie kamery (z lekkim przesunięciem w stronę, z której przyszła — kamera „przeskoczyła” na grupę).
-     Ograniczony ruch: te same zdjęcia, spokojne przenikania bez migawki, błysku i ruchu. */
+  /* ---- sesja fotografa (tryb multi, zamiast najazdu). Wszystkie zdjęcia leżą w jednym „świecie” (układ zdjęcia sceny,
+     0…1 → px ekranu): ekran gracza, zdjęcie sceny i ostre rendery grup — każdy render dokładnie na swoim kadrze. Kamera
+     (jeden transform na świecie) przerzuca się z kadru na kadr — fotograf łapie kolejne grupy, nie ekran „skacze”.
+     Na każdą grupę: celownik (narożniki) łapie grupę i zaciska się (ostrość), wyzwolenie: flesz (gorąca plama światła na
+     grupie, co najwyżej 3 błyski na sekundę — flashPlan), lekki odrzut aparatu, a klatka w tej samej chwili staje się
+     odbitką w wyglądzie strony (klasyczna: raster na papierze gazety; współczesna: kolor z białą ramką). Odbitka odlatuje
+     na stos w rogu i po drodze zostaje przycięta do kształtu miejsca, w którym stanie na stronie. Na końcu kamera odjeżdża
+     na całe zdjęcie sceny (zdjęcie główne). W fazie „press” odbitki ze stosu lądują w swoich miejscach na stronie.
+     Ograniczony ruch: spokojne przenikania (bez kamery, błysku i lotów), celownik i odbitki tylko pojawiają się i gasną. */
+  const SH = SHOOT, nShots = multi ? shots.length : 0, P = multi ? SH.step(nShots) : 0;
+  const startOf = (k) => SH.lead + k * P;
+  const aimOf = (k) => (k < nShots ? Math.round(SH.aim * P) : SH.finalAim);
+  const fireOf = (k) => (k < nShots ? startOf(k) + Math.round((SH.aim + SH.lock) * P) : startOf(nShots) + SH.finalFire);
+  const fires = multi ? Array.from({ length: nShots + 1 }, (_, k) => fireOf(k)) : [];
+  const flashOk = flashPlan(fires);
+  const unit = { x: 0, y: 0, w: 1, h: 1 };
+  // ekran gracza w układzie zdjęcia sceny (z tłem poza sceną, gdy był `cover`)
+  const coverCrop = multi && cover && crop && crop.w > 1 && crop.h > 1 ? crop : null;
+  const f0 = coverCrop ? { x: -coverCrop.x / coverCrop.w, y: -coverCrop.y / coverCrop.h, w: VW / coverCrop.w, h: VH / coverCrop.h } : unit;
+  const frameOf = (k) => (k < 0 ? f0 : k >= nShots ? unit : shotRect(shots[k]));
+  /** Cel celownika (układ zdjęcia sceny): grupa z marginesem; przy zdjęciu sceny — ramka całego kadru. */
+  const aimRect = (k) => {
+    if (k >= nShots) return { x: 0.045, y: 0.06, w: 0.91, h: 0.88 };
+    const R = frameOf(k), f = shots[k].focus ?? { x: 0.2, y: 0.2, w: 0.6, h: 0.6 };
+    return { x: R.x + f.x * R.w, y: R.y + f.y * R.h, w: f.w * R.w, h: f.h * R.h };
+  };
+  const camOf = (f) => ({ s: 1 / f.w, cx: f.x + f.w / 2, cy: f.y + f.h / 2 });
+  const aimEase = (u) => (u < 0.5 ? 4 * u ** 3 : 1 - (-2 * u + 2) ** 3 / 2);
+  /** Przerzut kamery z kadru a na b: skala w logarytmie z „oddechem” (lekkie odjechanie w połowie, jak operator szukający ujęcia). */
+  const camBetween = (a, b, e) => {
+    const A = camOf(a), B = camOf(b), dist = Math.hypot(B.cx - A.cx, (B.cy - A.cy) * (VH / VW));
+    const ls = Math.log(A.s) + (Math.log(B.s) - Math.log(A.s)) * e - Math.min(0.5, 0.85 * dist) * Math.sin(Math.PI * e);
+    return { s: Math.exp(ls), cx: A.cx + (B.cx - A.cx) * e, cy: A.cy + (B.cy - A.cy) * e };
+  };
+  const camAt = (ms) => {
+    let c;
+    if (ms < startOf(0)) { c = camOf(f0); c.s *= 1 + 0.012 * smooth(0, SH.lead, ms); } // podniesienie aparatu
+    else {
+      let k = 0;
+      while (k < nShots && ms >= startOf(k + 1)) k++;
+      c = camBetween(frameOf(k - 1), frameOf(k), aimEase(clamp((ms - startOf(k)) / aimOf(k), 0, 1)));
+    }
+    // odrzut przy wyzwoleniu: kilka px w dół, gaśnie w ~150 ms
+    let kick = 0;
+    for (const f of fires) if (ms >= f) kick = Math.exp(-(ms - f) / 50);
+    return { ...c, tx: VW / 2 - c.s * c.cx * VW, ty: VH / 2 - c.s * c.cy * VH + 3.5 * kick };
+  };
+  const onScreen = (c, r) => ({ x: c.tx + c.s * r.x * VW, y: c.ty + c.s * r.y * VH, w: c.s * r.w * VW, h: c.s * r.h * VH });
+
+  /* odbitki: kształt miejsca na stronie (proporcje z assignShots), stos w prawym dolnym rogu wolnego obszaru */
+  const slotAspect = (() => {
+    if (!multi) return [];
+    const map = assignShots(shots, modern ? "modern" : "classic"), slots = SHOT_SLOTS[modern ? "modern" : "classic"];
+    return shots.map((s) => { const id = Object.keys(map).find((key) => map[key] === s); return slots.find((x) => x.id === id)?.aspect ?? null; });
+  })();
+  const pileSize = clamp(Math.min(VW, VH) * 0.2, 110, 210);
+  const PILE_A = [-6, 4.5, -2.5, 7];
+  const cards = multi ? shots.map((s, k) => {
+    const c = slotAspect[k] ? focusCrop(VW, VH, s.focus, slotAspect[k]) : { sx: 0, sy: 0, sw: VW, sh: VH };
+    const sc = pileSize / Math.sqrt(c.sw * c.sh);
+    return {
+      crop: c, cl: { x: c.sx + c.sw / 2, y: c.sy + c.sh / 2 }, s: sc, a: PILE_A[k % 4] * dir,
+      at: { x: VW - safeA.right - pileSize * 0.95 - k * pileSize * 0.3, y: VH - safeA.bottom - pileSize * 0.78 - (k % 2) * pileSize * 0.12 },
+    };
+  }) : [];
+  /** Transform odbitki (początek układu = lewy górny róg ekranu w chwili zdjęcia): punkt `cl` trafia w `at`, skala `s`, obrót `a`. */
+  const cardTf = (cl, at, s, a) => {
+    const r = a * (Math.PI / 180), co = Math.cos(r), si = Math.sin(r);
+    return `translate(${(at.x - s * (cl.x * co - cl.y * si)).toFixed(2)}px, ${(at.y - s * (cl.x * si + cl.y * co)).toFixed(2)}px) rotate(${a.toFixed(3)}deg) scale(${s.toFixed(5)})`;
+  };
+  const pileTf = (k) => cardTf(cards[k].cl, cards[k].at, cards[k].s, cards[k].a);
+
+  /** Rozmiar odbitki pełnoekranowej (px płótna) i gotowe rastry druku (klasyczna; liczone w `ready`). */
+  const printW = Math.round(Math.min(lite ? 640 : 960, VW * (lite ? 0.6 : 0.75))), printH = Math.round((printW * VH) / VW);
+  let prints = null;
   let shootEls = null;
+  /** Odbitka: gotowy raster druku z `ready` (klasyczna) albo szybka wersja filtrem (współczesna / awaryjnie). */
+  const paintCard = (k) => {
+    const s = shots[k], el = shootEls.cards[k], fc = el.fullC, g = fc.getContext("2d");
+    if (prints?.[k]) g.drawImage(prints[k], 0, 0, fc.width, fc.height);
+    else {
+      g.save();
+      g.filter = modern ? "saturate(1.18) contrast(1.06)" : "grayscale(1) contrast(1.2) brightness(1.05)";
+      g.drawImage(s.image, 0, 0, fc.width, fc.height);
+      g.restore();
+    }
+    const c = cards[k].crop, kx = fc.width / VW, tc = el.trimC;
+    tc.getContext("2d").drawImage(fc, c.sx * kx, c.sy * kx, c.sw * kx, c.sh * kx, 0, 0, tc.width, tc.height);
+  };
   const shootLayers = () => {
     if (shootEls) return shootEls;
-    // te same płótna, z których malarz strony wycina miejsca (drawImage z płótna w DOM działa tak samo)
-    const show = shots.map((s) => {
-      s.image.style.cssText = `${ABS}opacity:0;transform-origin:50% 50%;will-change:transform,opacity;`;
-      return s.image;
-    });
-    const bar = (top) => {
-      const b = document.createElement("div");
-      b.style.cssText = `position:absolute;left:0;width:100%;height:50.5%;${top ? "top:0" : "bottom:0"};background:#050505;transform:translateY(${top ? -101 : 101}%);will-change:transform;`;
-      return b;
-    };
-    const fl = document.createElement("div");
-    fl.style.cssText = `${ABS}background:#fffaf0;opacity:0;mix-blend-mode:screen;will-change:opacity;`;
-    photo.style.cssText = `${ABS}opacity:0;transform-origin:50% 50%;will-change:transform,opacity;`;
-    first.style.transformOrigin = "50% 50%";
-    const top = reduced ? null : bar(true), bottom = reduced ? null : bar(false);
-    flat.append(...show, photo, fl);
-    if (!reduced) flat.append(top, bottom);
-    shootEls = { show, flash: fl, top, bottom };
-    return shootEls;
-  };
-  /** Kierunek „przeskoku” kamery na zdjęcie k (k = shots.length → zdjęcie sceny) — z położeń kadrów względem widoku. */
-  const hop = (k) => {
-    const at = (i) => (i < 0 || i >= shots.length ? { x: 0.5, y: 0.5 } : shots[i].pos ?? { x: 0.5, y: 0.5 });
-    const a = at(k - 1), b = at(k), dx = b.x - a.x, dy = (b.y - a.y) * (VH / VW), l = Math.hypot(dx, dy);
-    return l < 0.02 ? { x: 0, y: 0 } : { x: dx / l, y: dy / l };
-  };
-  /** Stan warstw sesji w chwili t∈[0,1]. */
-  const shootFrame = (t) => {
-    const n = shots.length, T = shootMs(n, reduced), ms = t * T, S = SHOOT;
-    const out = {};
+    const els = { shot: [], corner: [], lock: [], card: [], full: [], trim: [], cards: [] };
+    const cam = document.createElement("div");
+    cam.style.cssText = `${ABS}transform-origin:0 0;will-change:transform;`;
+    const place = (el, r, op = 1) => { el.style.cssText = `position:absolute;display:block;left:${(r.x * VW).toFixed(2)}px;top:${(r.y * VH).toFixed(2)}px;width:${(r.w * VW).toFixed(2)}px;height:${(r.h * VH).toFixed(2)}px;opacity:${op};`; };
     if (reduced) {
-      const cut = (k) => S.calmLead + k * S.calmStep;
-      shootEls.show.forEach((_, k) => { out[`show.${k}`] = { opacity: smooth(cut(k), cut(k) + S.calmFade, ms) }; });
-      out.final = { opacity: smooth(cut(n), cut(n) + S.calmFade, ms) };
+      // spokojnie: zdjęcia na pełnym ekranie, przenikania
+      for (const s of shots) { s.image.style.cssText = `${ABS}opacity:0;will-change:opacity;`; els.shot.push(s.image); }
+      photo.style.cssText = `${ABS}opacity:0;will-change:opacity;`;
+      flat.append(...els.shot, photo);
+    } else {
+      // świat: ekran gracza (cover) pod spodem, zdjęcie sceny, rendery grup na swoich kadrach
+      if (coverCrop) { place(first, f0); cam.append(first); } else first.remove();
+      place(photo, unit, coverCrop ? 0 : 1);
+      cam.append(photo);
+      for (let k = 0; k < nShots; k++) { place(shots[k].image, frameOf(k), 0); els.shot.push(shots[k].image); cam.append(shots[k].image); }
+      flat.append(cam);
+      els.cam = cam;
+      // winieta wizjera
+      const vign = document.createElement("div");
+      vign.style.cssText = `${ABS}opacity:0;will-change:opacity;background:radial-gradient(ellipse 72% 68% at 50% 50%, rgba(0,0,0,0) 52%, ${modern ? "rgba(0,0,0,0.5)" : "rgba(24,14,4,0.62)"} 100%);`;
+      // flesz: gorąca plama na fotografowanej grupie (żarówka błyskowa — ciepła w klasycznej, chłodniejsza w współczesnej)
+      const FS = 2.4 * Math.max(VW, VH), tint = modern ? "255,255,255" : "255,246,224";
+      const fl = document.createElement("div");
+      fl.style.cssText = `position:absolute;left:0;top:0;width:256px;height:256px;transform-origin:0 0;opacity:0;mix-blend-mode:screen;will-change:transform,opacity;pointer-events:none;`
+        + `background:radial-gradient(circle at 50% 50%, rgba(${tint},1) 0%, rgba(${tint},0.82) 9%, rgba(${tint},0.45) 22%, rgba(${tint},0.24) 40%, rgba(${tint},0.16) 100%);`;
+      els.flashSize = FS;
+      flat.append(vign);
+      els.vign = vign; els.flash = fl;
+    }
+    // celownik: 4 narożniki (położenie = transform), w współczesnym nad nimi narożniki w kolorze akcentu po złapaniu ostrości
+    const LC = Math.round(clamp(Math.min(VW, VH) * 0.04, 22, 44)), ink = modern ? "#ffffff" : "#f3e9cf";
+    const corner = (i, color, shadow) => {
+      const c = document.createElement("div");
+      const sides = [["top", "left"], ["top", "right"], ["bottom", "left"], ["bottom", "right"]][i];
+      c.style.cssText = `position:absolute;left:0;top:0;width:${LC}px;height:${LC}px;opacity:0;pointer-events:none;will-change:transform,opacity;box-sizing:border-box;`
+        + `border-${sides[0]}:3px solid ${color};border-${sides[1]}:3px solid ${color};${shadow ? "filter:drop-shadow(0 1px 2px rgba(0,0,0,0.85));" : ""}`;
+      return c;
+    };
+    for (let i = 0; i < 4; i++) els.corner.push(corner(i, ink, true));
+    if (modern && !reduced) for (let i = 0; i < 4; i++) els.lock.push(corner(i, d.accent, false));
+    els.LC = LC;
+    flat.append(...els.corner, ...els.lock);
+    // odbitki (w osobnej warstwie nad całością — przeżywają koniec sesji i lecą na stronę)
+    const deck = document.createElement("div");
+    deck.style.cssText = `${ABS}overflow:visible;`;
+    const pw = printW, ph = printH;
+    const paper = modern ? "#fbfbf8" : d.paper, bd = Math.round(6 / Math.max(0.05, cards[0]?.s ?? 0.15));
+    const shadowCss = (w) => `box-shadow:0 ${(w * 0.012).toFixed(1)}px ${(w * 0.03).toFixed(1)}px rgba(0,0,0,0.5);`;
+    for (let k = 0; k < nShots; k++) {
+      const c = cards[k].crop;
+      const box = document.createElement("div");
+      box.style.cssText = `position:absolute;left:0;top:0;width:${VW}px;height:${VH}px;transform-origin:0 0;opacity:0;pointer-events:none;will-change:transform,opacity;transform:${reduced ? pileTf(k) : "none"};`;
+      const full = document.createElement("div");
+      full.style.cssText = `position:absolute;left:${-bd}px;top:${-bd}px;width:${VW + 2 * bd}px;height:${VH + 2 * bd}px;background:${paper};opacity:${reduced ? 0 : 1};${shadowCss(VW)}`;
+      const fullC = mk(pw, ph);
+      fullC.style.cssText = `position:absolute;display:block;left:${bd}px;top:${bd}px;width:${VW}px;height:${VH}px;`;
+      full.append(fullC);
+      const trim = document.createElement("div");
+      trim.style.cssText = `position:absolute;left:${(c.sx - bd).toFixed(2)}px;top:${(c.sy - bd).toFixed(2)}px;width:${(c.sw + 2 * bd).toFixed(2)}px;height:${(c.sh + 2 * bd).toFixed(2)}px;background:${paper};opacity:${reduced ? 1 : 0};${shadowCss(Math.max(c.sw, c.sh))}`;
+      const trimC = mk(Math.max(8, (c.sw * pw) / VW), Math.max(8, (c.sh * pw) / VW));
+      trimC.style.cssText = `position:absolute;display:block;left:${bd}px;top:${bd}px;width:${c.sw.toFixed(2)}px;height:${c.sh.toFixed(2)}px;`;
+      trim.append(trimC);
+      box.append(full, trim);
+      deck.append(box);
+      els.card.push(box); els.full.push(full); els.trim.push(trim); els.cards.push({ fullC, trimC });
+    }
+    root.append(deck);
+    if (els.flash) root.append(els.flash); // błysk nad odbitką, która właśnie powstaje
+    els.deck = deck;
+    first.style.transformOrigin = "0 0";
+    shootEls = els;
+    for (let k = 0; k < nShots; k++) paintCard(k);
+    return els;
+  };
+
+  /** Stan warstw sesji w chwili t∈[0,1] (te same funkcje w WAAPI i w seek). */
+  const shootFrame = (t) => {
+    const n = nShots, T = shootMs(n, reduced), ms = t * T, els = shootEls, LC = els.LC;
+    const out = { corner: [], lock: [], shot: [], card: [], full: [], trim: [] };
+    const corners = (r, op, lockOp = 0) => {
+      const w = Math.max(r.w, 2.6 * LC), h = Math.max(r.h, 2.6 * LC), x = r.x + r.w / 2 - w / 2, y = r.y + r.h / 2 - h / 2;
+      const pos = [[x, y], [x + w - LC, y], [x, y + h - LC], [x + w - LC, y + h - LC]];
+      for (let i = 0; i < 4; i++) {
+        const tr = `translate(${pos[i][0].toFixed(2)}px, ${pos[i][1].toFixed(2)}px)`;
+        out.corner.push({ transform: tr, opacity: +op.toFixed(4) });
+        if (els.lock.length) out.lock.push({ transform: tr, opacity: +(op * lockOp).toFixed(4) });
+      }
+    };
+    if (reduced) {
+      const cut = (k) => SH.calmLead + k * SH.calmStep, F = SH.calmFade;
+      els.shot.forEach((_, k) => { out.shot.push({ opacity: +smooth(cut(k), cut(k) + F, ms).toFixed(4) }); });
+      out.final = { opacity: +smooth(cut(n), cut(n) + F, ms).toFixed(4) };
+      // celownik stoi na grupie bieżącego zdjęcia (bez ruchu), odbitka pojawia się na stosie, gdy zdjęcie „zrobione”
+      let k = 0;
+      while (k < n - 1 && ms >= cut(k + 1)) k++;
+      const f = shots[k]?.focus ?? unit, vis = n ? smooth(cut(k), cut(k) + F, ms) * (1 - smooth(cut(n), cut(n) + F, ms)) : 0;
+      corners({ x: f.x * VW, y: f.y * VH, w: f.w * VW, h: f.h * VH }, vis);
+      for (let j = 0; j < n; j++) out.card.push({ opacity: +smooth(cut(j) + F + 120, cut(j) + 2 * F + 120, ms).toFixed(4) });
+      out.full = []; out.trim = [];
       return out;
     }
-    const P = S.step(n), cut = (k) => S.lead + k * P;
-    // migawka: 0 = otwarta, 1 = zamknięta (zamyka się przed każdym cięciem, czerń, otwiera)
-    let shut = 0, flash = 0;
-    for (let k = 0; k <= n; k++) {
-      const c = cut(k);
-      if (ms >= c - S.close && ms < c) shut = Math.max(shut, smooth(c - S.close, c, ms));
-      else if (ms >= c && ms < c + S.black) shut = 1;
-      else if (ms >= c + S.black && ms < c + S.black + S.open) shut = Math.max(shut, 1 - smooth(c + S.black, c + S.black + S.open, ms));
-      const fx = (ms - c - S.black) / 190;
-      if (fx >= 0 && fx < 1) flash = Math.max(flash, (k === n ? 0.3 : 0.46) * (1 - fx) ** 2);
+    const c = camAt(ms);
+    out.cam = { transform: `translate(${c.tx.toFixed(2)}px, ${c.ty.toFixed(2)}px) scale(${c.s.toFixed(5)})` };
+    if (coverCrop) out.final = { opacity: +smooth(startOf(0), startOf(0) + 0.6 * aimOf(0), ms).toFixed(4) };
+    // ostre rendery grup: wchodzą pod koniec przerzutu, schodzą na początku następnego
+    for (let k = 0; k < n; k++) {
+      const a = startOf(k), a2 = startOf(k + 1), A = aimOf(k), A2 = aimOf(k + 1);
+      out.shot.push({ opacity: +(smooth(a + 0.4 * A, a + 0.9 * A, ms) * (1 - smooth(a2 + 0.05 * A2, a2 + 0.45 * A2, ms))).toFixed(4) });
     }
-    out.top = { transform: `translateY(${((shut - 1) * 101).toFixed(2)}%)` };
-    out.bottom = { transform: `translateY(${((1 - shut) * 101).toFixed(2)}%)` };
-    out.flash = { opacity: +flash.toFixed(4) };
-    // podniesienie aparatu: widok gracza ledwie się przybliża przed pierwszym zdjęciem
-    out.base = { transform: `scale(${(1 + 0.014 * smooth(0, S.lead, ms)).toFixed(5)})`, opacity: ms < cut(0) + S.black ? 1 : 0 };
-    const settle = (k, len, amp, shift) => {
-      const c = cut(k), e = expoOut(clamp((ms - c - S.black) / len, 0, 1)), h = hop(k);
-      const vis = ms >= c + S.black * 0.5 && (k === n || ms < cut(k + 1) + S.black * 0.5);
-      return { transform: `translate(${(h.x * shift * VW * (1 - e)).toFixed(2)}px, ${(h.y * shift * VW * (1 - e)).toFixed(2)}px) scale(${(1 + amp * (1 - e)).toFixed(5)})`, opacity: vis ? 1 : 0 };
-    };
-    shootEls.show.forEach((_, k) => { out[`show.${k}`] = settle(k, P * 0.95, 0.07, 0.03); });
-    out.final = settle(n, S.final, 0.035, 0.018);
+    // celownik: łapie cel (pierwszy — z szerszego kadru, kolejne wjeżdżają z kamerą), zaciska się przed wyzwoleniem, gaśnie przy błysku
+    let k = 0;
+    while (k < n && ms >= fireOf(k) + 70) k++;
+    {
+      const s0 = k === 0 ? 0 : startOf(k), A = aimOf(k), fr = fireOf(k);
+      const show = k === 0 ? smooth(0, 120, ms) : smooth(s0, s0 + 0.3 * A, ms);
+      const op = show * (1 - smooth(fr, fr + 60, ms));
+      const lockT = smooth(startOf(k) + A, fr - 8, ms);
+      const grow = (k === 0 ? 0.35 * (1 - smooth(0, SH.lead, ms)) : 0) - 0.07 * lockT;
+      const r = onScreen(c, aimRect(k)), cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+      corners({ x: cx - (r.w * (1 + grow)) / 2, y: cy - (r.h * (1 + grow)) / 2, w: r.w * (1 + grow), h: r.h * (1 + grow) }, op, lockT);
+    }
+    out.vign = { opacity: +(0.85 * smooth(0, SH.lead, ms) * (1 - smooth(fireOf(n), fireOf(n) + 180, ms))).toFixed(4) };
+    // flesz: ostatni dozwolony błysk przed chwilą ms
+    let fl = 0, at = { x: VW / 2, y: VH / 2 };
+    fires.forEach((f, j) => {
+      if (!flashOk[j] || ms < f) return;
+      const x = ms - f, amp = j < n ? 0.5 : 0.34;
+      fl = x < 25 ? amp * (x / 25) : amp * (1 - clamp((x - 25) / 210, 0, 1)) ** 2;
+      const a = j < n ? shots[j].focus ?? unit : unit;
+      at = { x: (a.x + a.w / 2) * VW, y: (a.y + a.h / 2) * VH };
+    });
+    out.flash = { transform: `translate(${(at.x - els.flashSize / 2).toFixed(1)}px, ${(at.y - els.flashSize / 2).toFixed(1)}px) scale(${(els.flashSize / 256).toFixed(4)})`, opacity: +fl.toFixed(4) };
+    // odbitki: w chwili wyzwolenia klatka staje się odbitką na cały ekran, potem odlatuje na stos i po drodze jest przycinana
+    for (let j = 0; j < n; j++) {
+      const f = fireOf(j), u = clamp((ms - f - SH.freeze) / SH.toss, 0, 1), e = 1 - (1 - u) ** 3, cd = cards[j];
+      // „wyskok” odbitki w czasie stopklatki: ramka papieru pojawia się dookoła, zanim odbitka odleci
+      const pop = 1 - 0.07 * expoOut(clamp((ms - f) / SH.freeze, 0, 1));
+      const s = pop * Math.exp(Math.log(cd.s) * e), a = cd.a * e;
+      const at2 = { x: cd.cl.x + (cd.at.x - cd.cl.x) * e, y: cd.cl.y + (cd.at.y - cd.cl.y) * e - VH * 0.07 * Math.sin(Math.PI * e) };
+      out.card.push({ transform: ms < f ? "translate(0px, 0px) rotate(0deg) scale(1)" : cardTf(cd.cl, at2, s, a), opacity: +smooth(f, f + 30, ms).toFixed(4) });
+      out.full.push({ opacity: +(1 - smooth(0.35, 0.75, u)).toFixed(4) });
+      out.trim.push({ opacity: +smooth(0.3, 0.65, u).toFixed(4) });
+    }
     return out;
+  };
+  const shootLayer = (key) => {
+    const els = shootEls, [name, idx] = key.split(".");
+    if (name === "final") return photo;
+    return idx !== undefined ? els[name]?.[+idx] : els[name];
+  };
+  /** Po sesji: odbitki zostają na stosie (stan wpisany na stałe), reszta sesji zdjęta, zdjęcie sceny na pełnym ekranie. */
+  const settleShoot = (list) => {
+    const els = shootEls;
+    for (const a of list) a.cancel();
+    els.card.forEach((box, k) => { box.style.transform = pileTf(k); box.style.opacity = "1"; els.full[k].style.opacity = "0"; els.trim[k].style.opacity = "1"; });
+    photo.style.cssText = `${ABS}`;
+    flat.append(photo);
+    for (const el of [first, els.cam, ...els.shot, ...els.corner, ...els.lock, els.vign, els.flash]) el?.remove();
   };
   let shootDone = null;
   function shoot() {
     if (shootDone) return shootDone;
     shootDone = (async () => {
       if (!multi || closed) return;
-      const els = shootLayers();
-      const lay = (key) => {
-        const [name, idx] = key.split(".");
-        return name === "show" ? els.show[+idx] : name === "final" ? photo : name === "base" ? first : els[name];
-      };
-      const T = shootMs(shots.length, reduced), list = [];
-      for (const [k, kf] of Object.entries(sample(shootFrame, T))) { const el = lay(k); if (el) list.push(play(el, kf, { duration: T })); }
+      shootLayers();
+      const T = shootMs(nShots, reduced), list = [];
+      for (const [k, kf] of Object.entries(sample(shootFrame, T))) { const el = shootLayer(k); if (el) list.push(play(el, kf, { duration: T })); }
       await Promise.all(list.map((a) => a.finished.catch(() => {})));
       if (closed) return;
-      // stan końcowy: samo zdjęcie sceny na pełnym ekranie (jak po najeździe); reszta sesji zdjęta
-      for (const a of list) a.cancel();
-      photo.style.cssText = `${ABS}`;
-      for (const el of [first, ...els.show, els.flash, els.top, els.bottom]) el?.remove();
+      settleShoot(list);
     })();
     return shootDone;
   }
+
+  /** Środki miejsc zdjęć grup na stronie w spoczynku (px ekranu) — sonda z tą samą pozą co strona, pomiar i usunięcie. */
+  const slotTargets = () => {
+    const b = built, k = b.restW / b.page.canvas.width, out = {};
+    if (!b.page.shotRects?.length) return out;
+    const probe = document.createElement("div");
+    probe.style.cssText = `${ABS}visibility:hidden;transform-origin:50% 50%;transform:${tf(restPose())};`;
+    const marks = b.page.shotRects.map((r) => {
+      const m = document.createElement("div");
+      m.style.cssText = `position:absolute;left:${(r.x * k).toFixed(2)}px;top:${(r.y * k).toFixed(2)}px;width:${(r.w * k).toFixed(2)}px;height:${(r.h * k).toFixed(2)}px;`;
+      probe.append(m);
+      return { i: r.i, m, w: r.w * k };
+    });
+    b.rig.append(probe);
+    const rb = root.getBoundingClientRect();
+    for (const { i, m, w } of marks) { const q = m.getBoundingClientRect(); out[i] = { x: q.left - rb.left + q.width / 2, y: q.top - rb.top + q.height / 2, w }; }
+    probe.remove();
+    return out;
+  };
+  /** Faza „press”: odbitki ze stosu lądują w swoich miejscach na stronie (strona już prawie w spoczynku) i wsiąkają w druk. */
+  const deckToPage = () => {
+    const els = shootEls;
+    if (!els?.card.length) return;
+    const to = slotTargets();
+    els.card.forEach((box, k) => {
+      const cd = cards[k], tg = to[k], d0 = PRESS_MS * 0.4 + k * 80;
+      if (!tg) { play(box, [{ opacity: 1 }, { opacity: 0 }], { duration: 360, delay: PRESS_MS * 0.45, easing: "ease-in" }); return; }
+      const s1 = tg.w / cd.crop.sw, a1 = REST_RZ, kf = [], N = 30, dur = 600;
+      for (let i = 0; i <= N; i++) {
+        const u = i / N, e = aimEase(u), lift = 1 + 0.14 * Math.sin(Math.PI * e);
+        const s = Math.exp(Math.log(cd.s) + (Math.log(s1) - Math.log(cd.s)) * e) * lift, a = cd.a + (a1 - cd.a) * e;
+        const at = { x: cd.at.x + (tg.x - cd.at.x) * e, y: cd.at.y + (tg.y - cd.at.y) * e - VH * 0.05 * Math.sin(Math.PI * e) };
+        kf.push({ transform: cardTf(cd.cl, at, s, a), opacity: +(1 - smooth(0.74, 1, u)).toFixed(4), offset: u });
+      }
+      play(box, kf, { duration: dur, delay: d0 });
+    });
+  };
 
   const REST_RZ = -2.2 * dir;
   const restPose = () => ({ x: 0, y: 0, s: 1, rz: REST_RZ, rx: 7, ry: 0 });
@@ -1517,7 +1759,8 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
       sheet: { transform: tf(p) },
       shadow: { transform: tf({ ...p, x: p.x + 4 * e, y: p.y + 16 * e, s: p.s * (1 + 0.025 * e) }), opacity: 0.6 * smooth(0.15, 0.8, t) },
       photo: { opacity: 1 - smooth(0.05, 0.25, t) },
-      flash: { opacity: flash },
+      // multi: zdjęcie sceny dostało już swój błysk w sesji fotografa — drugi tuż po nim przekroczyłby 3 błyski na sekundę
+      flash: { opacity: multi ? 0 : flash },
       ...built?.cine?.press(t, p),
     };
   };
@@ -1584,6 +1827,8 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
     b.sheet.append(photo);
     root.append(b.backdrop, b.rig, b.flash);
     b.cine?.mount(root, b.sheet, b.backdrop);
+    // stos odbitek nad stroną, pod ziarnem taśmy
+    if (shootEls?.deck) { if (b.film?.isConnected) root.insertBefore(shootEls.deck, b.film); else root.append(shootEls.deck); }
     flat.remove();
     for (const gc of b.ghosts) gc.style.transform = tf(restPose());
   };
@@ -1602,6 +1847,7 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
         // spokojnie: gotowa strona w spoczynku przenika się ze zrzutem (bez zoomu i obrotu)
         root.append(b.backdrop, b.rig);
         root.append(flat); // zrzut nad stroną, znika
+        if (shootEls?.deck) { root.append(shootEls.deck); play(shootEls.deck, [{ opacity: 1 }, { opacity: 0 }], { duration: CALM_IN_MS, easing: "ease-out" }); }
         b.sheet.style.transform = tf(restPose());
         b.shadow.style.transform = tf({ ...restPose(), y: 14, s: 1.02 }); b.shadow.style.opacity = "0.5";
         await play(flat, [{ opacity: 1 }, { opacity: 0 }], { duration: CALM_IN_MS, easing: "ease-out" }).finished.catch(() => {});
@@ -1609,6 +1855,7 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
         return;
       }
       placeAtStart();
+      if (multi) deckToPage(); // odbitki ze stosu lecą w swoje miejsca na stronie
       b.cine?.loops(play); // ziarno taśmy i migotanie projektora (do końca przejścia)
       let last = null;
       for (const [k, kf] of Object.entries(sample(pressFrame, PRESS_MS))) last = play(layer(k), kf, { duration: PRESS_MS });
@@ -1655,13 +1902,14 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
       // sesja fotografa: tylko w trybie multi i zanim strona przejęła zdjęcie sceny
       if (!multi || b.rig.isConnected) return;
       shootDone = Promise.resolve(); // press() po seek("shoot") nie odpali sesji drugi raz
-      const els = shootLayers(), f = shootFrame(t);
-      for (const [key, st] of Object.entries(f)) {
-        const [name, idx] = key.split(".");
-        const el = name === "show" ? els.show[+idx] : name === "final" ? photo : name === "base" ? first : els[name];
-        if (!el) continue;
-        if (st.transform) el.style.transform = st.transform;
-        if (st.opacity !== undefined) el.style.opacity = String(st.opacity);
+      shootLayers();
+      for (const [k, v] of Object.entries(shootFrame(t))) {
+        for (const [key, st] of Array.isArray(v) ? v.map((x, j) => [`${k}.${j}`, x]) : [[k, v]]) {
+          const el = shootLayer(key);
+          if (!el) continue;
+          if (st.transform) el.style.transform = st.transform;
+          if (st.opacity !== undefined) el.style.opacity = String(st.opacity);
+        }
       }
       return;
     }
