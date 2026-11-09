@@ -383,7 +383,12 @@ export const transitionSyncId = (sceneId) => `t:${sceneId}`;
 const transitionGoSeen = new Map(); // syncId → startAt „tgo”, które dotarło, zanim klient zgłosił gotowość (np. po limicie czasu)
 
 /** Hook updateScene (każdy klient): zapamiętaj, że scena została właśnie aktywowana. */
-export function noteSceneActivation(sceneId) { activations.set(sceneId, performance.now()); }
+export function noteSceneActivation(sceneId) {
+  activations.set(sceneId, performance.now());
+  // „tgo” z POPRZEDNIEJ aktywacji tej sceny, którego ten klient nie zużył (nie grał przejścia) — inaczej przy tej
+  // aktywacji wystartowałby od razu, nie czekając na wspólny start (syncId jest stały dla sceny).
+  transitionGoSeen.delete(transitionSyncId(sceneId));
+}
 
 /** syncId dla przejścia sceny, jeśli ten klient widział aktywację w ciągu ostatnich 2 minut; inaczej null (bez synchronizacji). */
 export function syncIdForScene(sceneId) {
@@ -399,13 +404,18 @@ function reportTransitionReady(id) {
 
 /** Klient: zgłoś gotowość, poczekaj na „tgo” i odczekaj do wspólnego czasu startu. */
 async function transitionStart(id, isClosed) {
+  let waiter = null;
   const startAt = await new Promise((resolve) => {
     if (transitionGoSeen.has(id)) { resolve(transitionGoSeen.get(id)); return; } // „tgo” już było
     const timer = setTimeout(() => resolve(null), TRANSITION_SYNC_WAIT_MS);
-    transitionGoWaiters.set(id, (v) => { clearTimeout(timer); resolve(v); });
+    // poprzednie czekanie na ten sam syncId (ponowna aktywacja sceny) kończy się bez startu — inaczej jego limit
+    // usunąłby później oczekiwanie bieżącej sesji
+    transitionGoWaiters.get(id)?.(null);
+    waiter = (v) => { clearTimeout(timer); resolve(v); };
+    transitionGoWaiters.set(id, waiter);
     reportTransitionReady(id);
   });
-  transitionGoWaiters.delete(id); transitionGoSeen.delete(id);
+  if (!waiter || transitionGoWaiters.get(id) === waiter) { transitionGoWaiters.delete(id); transitionGoSeen.delete(id); }
   if (isClosed()) return;
   const info = clockOffset.get(id);
   let delay = 0;
@@ -431,7 +441,11 @@ export function transitionReadyOnly(id) { reportTransitionReady(id); }
  */
 export async function runTransitionBarrier(sceneId, syncId) {
   const expected = new Set(game.users.filter((u) => u.active).map((u) => u.id));
-  const run = { ready: new Set(), failed: new Set(), expected, wake: () => {} };
+  const run = { ready: new Set(), failed: new Set(), expected, wake: () => {}, cancelled: false };
+  // syncId jest stały dla sceny: ponowna aktywacja tej samej sceny, zanim poprzednia bariera skończyła, zastępuje ją
+  // (stara nie może wysłać „tgo” nowej sesji ani usunąć jej wpisu)
+  const prev = runs.get(syncId);
+  if (prev && prev.cancel) prev.cancel();
   runs.set(syncId, run);
   syncClock(syncId); // inicjator: offset 0
   const t0 = performance.now();
@@ -441,15 +455,20 @@ export async function runTransitionBarrier(sceneId, syncId) {
     if (performance.now() - t0 > 5000 && user.viewedScene && user.viewedScene !== sceneId) return false; // ogląda inną scenę
     return true;
   });
-  const allDone = new Promise((res) => { run.wake = () => { if (!stillWaiting().length) res(true); }; });
+  const allDone = new Promise((res) => {
+    run.wake = () => { if (!stillWaiting().length) res(true); };
+    run.cancel = () => { run.cancelled = true; res(false); };
+  });
   const ticker = setInterval(() => run.wake(), 500);
   try {
     await Promise.race([allDone, sleep(TRANSITION_SYNC_WAIT_MS).then(() => false)]);
+    if (run.cancelled) return;
     transitionGoSeen.delete(syncId);
     await game.settings.set(MODULE_ID, "splashState", { id: syncId, phase: "tgo", startAt: epoch() + START_LEAD_MS, at: Date.now() });
   } finally {
     clearInterval(ticker);
-    setTimeout(() => runs.delete(syncId), START_LEAD_MS + 3000);
+    run.cancel = null;
+    setTimeout(() => { if (runs.get(syncId) === run) runs.delete(syncId); }, run.cancelled ? 0 : START_LEAD_MS + 3000);
   }
 }
 

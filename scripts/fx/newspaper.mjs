@@ -17,6 +17,7 @@
    widoczne tylko przy dużej prędkości kątowej = rozmycie ruchu) → strona (płótno 2D + czyste zdjęcie, które przenika się
    z rastrem). Wszystkie ruchy to transform/opacity (kompozytor), klatki kluczowe liczone z funkcji pozy (własne krzywe).
    Warstwa filmowa (światło studyjne, migawka, przeostrzenie, taśma, kamera z ręki): newspaper-motion.mjs. */
+import { halftoneGrid, halftoneRaster, halftoneTone } from "./halftone.mjs";
 import { cinema, SHUTTER } from "./newspaper-motion.mjs";
 
 /** Limity znaków pól tekstu (klucz = nazwa pola; `story` — jeden nagłówek z listy, `stories` — ile nagłówków). */
@@ -133,6 +134,21 @@ const num = (v, d, a, b) => {
 const line = (v, max) => (typeof v === "string" ? [...v.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ").replace(/\s+/g, " ").trim()].slice(0, max).join("").trim() : "");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
+/**
+ * Oddaj wątek: kolejne zadanie (bez minimalnego opóźnienia setTimeout), czyli już PO wyrenderowaniu klatki. scheduler.postTask,
+ * a bez niego JEDEN stały MessageChannel z kolejką (kanał tworzony na każde wywołanie bywa sprzątany przez GC, zanim dostarczy
+ * wiadomość — obietnica nigdy by się nie spełniła).
+ */
+const taskQ = [];
+let taskCh = null;
+const task = () => {
+  if (globalThis.scheduler?.postTask) return globalThis.scheduler.postTask(() => {}, { priority: "user-visible" });
+  return new Promise((r) => {
+    if (!taskCh) { taskCh = new MessageChannel(); taskCh.port1.onmessage = () => taskQ.shift()?.(); }
+    taskQ.push(r);
+    taskCh.port2.postMessage(0);
+  });
+};
 
 /** Lista nagłówków z tablicy, obiektu {0: …, 1: …} (pola formularza) albo tekstu wieloliniowego. Puste pozycje zostają (= domyślny). */
 function storyList(v) {
@@ -354,9 +370,39 @@ export function prefersReducedMotion() {
 /** Załaduj krój (regular + bold) zanim strona zostanie narysowana; po limicie czasu rysujemy krojem zastępczym. */
 export async function ensurePaperFont(family, timeoutMs = 1500) {
   if (!family || !document.fonts?.load) return false;
+  // załadowany raz = załadowany (pamięć modułu): kolejne gazety nie ścigają się z limitem czasu
+  if (fontOk.has(family)) return true;
   const want = [`400 20px "${family}"`, `700 20px "${family}"`];
-  const ok = await Promise.race([Promise.all(want.map((f) => document.fonts.load(f))).then((r) => r.some((x) => x.length > 0)), sleep(timeoutMs).then(() => false)]);
+  let timer = 0;
+  const ok = await Promise.race([Promise.all(want.map((f) => document.fonts.load(f))).then((r) => r.some((x) => x.length > 0)),
+    new Promise((res) => { timer = setTimeout(() => res(false), timeoutMs); })]);
+  clearTimeout(timer);
+  if (ok) fontOk.add(family);
   return !!ok;
+}
+const fontOk = new Set();
+
+/**
+ * Rozgrzewka w czasie bezczynności (np. po wczytaniu świata): kroje + jedna mała strona każdego wyglądu, żeby pierwsza
+ * prawdziwa gazeta nie płaciła za kompilację kodu malowania i pierwsze użycie krojów. Raz na sesję; nic nie zostaje w DOM.
+ */
+export function prewarmNewspaper({ family = null, sansFamily = null, condFamily = null } = {}) {
+  if (prewarmNewspaper.done) return prewarmNewspaper.done;
+  const idle = () => new Promise((r) => (globalThis.requestIdleCallback ? requestIdleCallback(() => r(), { timeout: 3000 }) : setTimeout(r, 200)));
+  return (prewarmNewspaper.done = (async () => {
+    const [a, b, c] = await Promise.all([ensurePaperFont(family, 4000), ensurePaperFont(sansFamily, 4000), ensurePaperFont(condFamily, 4000)]);
+    const fonts = { serif: a ? family : null, sans: b ? sansFamily : null, cond: c ? condFamily : null };
+    const photo = mk(192, 108), pg = photo.getContext("2d"), gr = pg.createLinearGradient(0, 0, 192, 108);
+    gr.addColorStop(0, "#2a3440"); gr.addColorStop(1, "#c9b48a");
+    pg.fillStyle = gr; pg.fillRect(0, 0, 192, 108);
+    for (const style of ["classic", "modern"]) {
+      await idle();
+      const data = sanitizeNewspaper({ style });
+      const args = { W: 420, photo, aspect: 16 / 9, data, seed: 1, fonts, lite: false, cssScale: 1, shots: null };
+      (style === "modern" ? paintModern : paintPage)(args);
+    }
+    return true;
+  })().catch(() => false));
 }
 
 /* ================================================================ losowość i proza */
@@ -462,9 +508,12 @@ const SANS_FALLBACK = '"Segoe UI", "Helvetica Neue", Arial, sans-serif';
 /** Wersaliki zgodnie z językiem tekstu (polskie znaki też). */
 const upper = (s) => s.toLocaleUpperCase();
 
-/** Szerokości znaków z pamięcią podręczną (tysiące słów — measureText raz na znak i krój). */
+/** Szerokości znaków z pamięcią podręczną (tysiące słów — measureText raz na znak i krój). Pamięć wspólna dla wszystkich
+ *  stron (ten sam krój i rozmiar = te same szerokości), czyszczona po przekroczeniu limitu krojów. */
+const MEASURE = new Map();
 function measurer(g) {
-  const cache = new Map();
+  if (MEASURE.size > 600) MEASURE.clear();
+  const cache = MEASURE;
   return (s) => {
     const f = g.font;
     let m = cache.get(f);
@@ -1116,92 +1165,60 @@ export function paintModern({ W, photo, aspect, data, seed = 1, fonts = {}, lite
 
 /**
  * Raster gazetowy: zdjęcie w skali szarości jako kropki farby na siatce obróconej o 45°, pole kropki ∝ zaczernienie.
- * `cell` — skok siatki w px płótna strony.
+ * `cell` — skok siatki w px płótna strony. Obliczenia w halftone.mjs (te same w wątku roboczym odbitek); tu tylko
+ * próbkowanie źródła i wklejenie gotowych pikseli (jeden putImageData zamiast setek tysięcy łuków na GPU).
  */
 function halftone(g, src, rect, cell, ink, paper) {
-  const sw = Math.max(8, Math.round(rect.w / (cell * 0.5))), sh = Math.max(8, Math.round((sw * rect.h) / rect.w));
+  const { sw, sh } = halftoneGrid(rect.w, rect.h, cell);
   const sc = mk(sw, sh), sg = sc.getContext("2d", { willReadFrequently: true });
   sg.imageSmoothingQuality = "high";
   sg.drawImage(src, 0, 0, sw, sh);
-  const px = sg.getImageData(0, 0, sw, sh).data;
-  const L = new Float32Array(sw * sh);
-  for (let i = 0, j = 0; i < L.length; i++, j += 4) L[i] = (0.2126 * px[j] + 0.7152 * px[j + 1] + 0.0722 * px[j + 2]) / 255;
-  // „redakcja fotograficzna”: rozciągnij tony (1.–99. percentyl) i rozjaśnij ciemne kadry (średnia → ~0,5),
-  // inaczej nocna scena wychodzi jako czarny prostokąt
-  const sorted = Float32Array.from(L).sort();
-  const lo = sorted[Math.floor(sorted.length * 0.01)], hi = Math.max(lo + 0.05, sorted[Math.floor(sorted.length * 0.995)]);
-  let mean = 0;
-  for (let i = 0; i < L.length; i++) { L[i] = clamp((L[i] - lo) / (hi - lo), 0, 1); mean += L[i]; }
-  mean = clamp(mean / L.length, 0.02, 0.98);
-  // średnia tonów → ~0,52 (nocna scena nie może wyjść czarnym prostokątem, jasna — wypraną; farba i tak „przyrasta”)
-  const gam = clamp(Math.log(0.52) / Math.log(mean), 0.45, 1.6);
-  // + łagodna krzywa S: po rozjaśnieniu cienie wracają do czerni, światła do papieru (bez „mgły” na ciemnych kadrach)
-  for (let i = 0; i < L.length; i++) { const v = L[i] ** gam; L[i] = v + 0.45 * ((v < 0.5 ? 2 * v * v : 1 - 2 * (1 - v) ** 2) - v); }
-  // retusz kliszy: wyostrzenie lokalnego kontrastu (maska nieostra), żeby małe zdjęcie nie zlewało się w plamy
-  const bl = boxBlur(L, sw, sh, Math.max(2, Math.round(sw / 160))), amt = 0.9;
-  for (let i = 0; i < L.length; i++) L[i] = clamp(L[i] + amt * (L[i] - bl[i]), 0, 1);
+  const L = halftoneTone(sg.getImageData(0, 0, sw, sh).data, sw, sh);
+  const r = halftoneRaster(L, sw, sh, rect, cell, ink, paper);
+  const out = mk(r.bw, r.bh);
+  out.getContext("2d").putImageData(new ImageData(r.data, r.bw, r.bh), 0, 0);
   g.save();
   g.beginPath(); g.rect(rect.x, rect.y, rect.w, rect.h); g.clip();
-  // papier pod zdjęciem minimalnie szarszy (farba „przebija”)
-  g.fillStyle = paper; g.fillRect(rect.x, rect.y, rect.w, rect.h);
-  g.fillStyle = "rgba(0,0,0,0.05)"; g.fillRect(rect.x, rect.y, rect.w, rect.h);
-  g.fillStyle = ink;
-  const ca = Math.SQRT1_2, sa = Math.SQRT1_2;
-  const cx = rect.x + rect.w / 2, cy = rect.y + rect.h / 2, R = Math.hypot(rect.w, rect.h) / 2 + cell;
-  // promień kropki z żądanego pokrycia c: do c = π/4 kropki się nie stykają (r = √(c/π)·cell), dalej szybki dojazd do
-  // pełnego krycia (r → cell/√2, rogi komórki zalane). Pokrycie liniowe w tonie — półton to ~50 % farby, nie 90 %.
-  const PI4 = Math.PI / 4;
-  const radius = (cv) => (cv <= PI4 ? Math.sqrt(cv / Math.PI) : 0.5 + ((cv - PI4) / (1 - PI4)) * (Math.SQRT1_2 - 0.5)) * cell;
-  let n = 0;
-  g.beginPath();
-  for (let v = -R; v <= R; v += cell) {
-    for (let uu = -R; uu <= R; uu += cell) {
-      const x = cx + uu * ca - v * sa, y = cy + uu * sa + v * ca;
-      if (x < rect.x - cell || x > rect.x + rect.w + cell || y < rect.y - cell || y > rect.y + rect.h + cell) continue;
-      const fx = clamp(((x - rect.x) / rect.w) * sw, 0, sw - 1), fy = clamp(((y - rect.y) / rect.h) * sh, 0, sh - 1);
-      const lx = fx | 0, ly = fy | 0, ax = fx - lx, ay = fy - ly, lx1 = Math.min(sw - 1, lx + 1), ly1 = Math.min(sh - 1, ly + 1);
-      const l = (L[ly * sw + lx] * (1 - ax) + L[ly * sw + lx1] * ax) * (1 - ay) + (L[ly1 * sw + lx] * (1 - ax) + L[ly1 * sw + lx1] * ax) * ay;
-      // krzywa gazetowa: najjaśniejsze światła zostają czystym papierem, najgłębsze cienie zalane do pełna
-      const cv = clamp((1 - l - 0.05) / 0.88, 0, 1);
-      if (cv <= 0) continue;
-      const rr = radius(cv);
-      if (rr < 0.28) continue;
-      g.moveTo(x + rr, y); g.arc(x, y, rr, 0, Math.PI * 2);
-      if (++n % 3000 === 0) { g.fill(); g.beginPath(); }
-    }
-  }
-  g.fill();
+  g.drawImage(out, r.X0, r.Y0);
   g.restore();
 }
 
-/** Rozmycie pudełkowe (2 przebiegi ≈ gauss) siatki jasności `L` (sw × sh), promień `rad` próbek. */
-function boxBlur(L, sw, sh, rad) {
-  const a = Float32Array.from(L), b = new Float32Array(L.length), k = 1 / (2 * rad + 1);
-  for (let p = 0; p < 2; p++) {
-    // poziomo a → b (suma krocząca, brzegi powielone)
-    for (let y = 0, o = 0; y < sh; y++, o += sw) {
-      let s = 0;
-      for (let i = -rad; i <= rad; i++) s += a[o + (i < 0 ? 0 : i >= sw ? sw - 1 : i)];
-      for (let x = 0; x < sw; x++) {
-        b[o + x] = s * k;
-        const add = x + rad + 1, sub = x - rad;
-        s += a[o + (add >= sw ? sw - 1 : add)] - a[o + (sub < 0 ? 0 : sub)];
-      }
+/**
+ * Raster odbitki (w × h) w wątku roboczym — sesja fotografa nie gubi klatek na słabszym sprzęcie. Obietnica ImageBitmap
+ * albo null (brak wątku, błąd, brak odpowiedzi w 2 s) → wtedy raster w wątku głównym. Wątek wspólny dla wszystkich gazet.
+ */
+let printWorker = null, printSeq = 0;
+const printJobs = new Map();
+function halftoneOffThread(src, w, h, cell, ink, paper) {
+  if (printWorker === false || typeof Worker !== "function" || typeof OffscreenCanvas !== "function" || typeof createImageBitmap !== "function") return Promise.resolve(null);
+  try {
+    if (!printWorker) {
+      const wk = new Worker(new URL("./halftone-worker.mjs", import.meta.url), { type: "module" });
+      wk.onmessage = (e) => {
+        const job = printJobs.get(e.data?.id);
+        if (job) { printJobs.delete(e.data.id); job(e.data); } else e.data?.bitmap?.close?.(); // po limicie czasu
+      };
+      wk.onerror = (e) => {
+        console.warn("newspaper | wątek rastra odbitek niedostępny — raster w wątku głównym", e?.message ?? e);
+        try { wk.terminate(); } catch { /* */ }
+        printWorker = false;
+        for (const job of printJobs.values()) job({ error: "worker" });
+        printJobs.clear();
+      };
+      printWorker = wk;
     }
-    // pionowo b → a
-    for (let x = 0; x < sw; x++) {
-      let s = 0;
-      for (let i = -rad; i <= rad; i++) s += b[(i < 0 ? 0 : i >= sh ? sh - 1 : i) * sw + x];
-      for (let y = 0; y < sh; y++) {
-        a[y * sw + x] = s * k;
-        const add = y + rad + 1, sub = y - rad;
-        s += b[(add >= sh ? sh - 1 : add) * sw + x] - b[(sub < 0 ? 0 : sub) * sw + x];
-      }
-    }
-  }
-  return a;
+  } catch { printWorker = false; return Promise.resolve(null); }
+  return createImageBitmap(src).then((bitmap) => new Promise((res) => {
+    if (!printWorker) { bitmap.close?.(); res({ error: "worker" }); return; }
+    const id = ++printSeq;
+    const t = setTimeout(() => { if (printJobs.delete(id)) res({ error: "timeout" }); }, 2000);
+    printJobs.set(id, (r) => { clearTimeout(t); res(r); });
+    printWorker.postMessage({ id, bitmap, w, h, cell, ink, paper }, [bitmap]);
+  })).then((r) => r?.bitmap ?? null, () => null);
 }
 
+/** Bok wycięcia zagiętego rogu w jednostkach u = W/1000 (warstwy światła w newspaper-motion.mjs przycinają się do tego kształtu). */
+const PAGE_CORNER = 58;
 /** Faktura papieru, zażółcenie brzegów, zgięcie w pół i zagięty róg. */
 function paperFinish(g, W, H, u, r, paper, lite, aged = true) {
   // ziarno: kafel szumu z rzadkimi włóknami, mnożony
@@ -1240,7 +1257,7 @@ function paperFinish(g, W, H, u, r, paper, lite, aged = true) {
   g.fillStyle = "rgba(255,250,235,0.35)"; g.fillRect(0, fy + 1.2 * u, W, 1.6 * u);
   g.restore();
   // zagięty róg (prawy dolny): wycięcie + zakładka z cieniem
-  const d = 58 * u;
+  const d = PAGE_CORNER * u;
   g.save();
   g.globalCompositeOperation = "destination-out";
   g.beginPath(); g.moveTo(W - d, H); g.lineTo(W, H - d); g.lineTo(W, H); g.closePath(); g.fill();
@@ -1310,6 +1327,7 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
     multi, shots: multi ? shots.length : 0, shootMs: multi ? shootMs(shots.length, reduced) : 0 };
   const anims = new Set();
   let closed = false, built = null, pressDone = null;
+  const kfCache = { press: null, spin: null };
   const play = (el, kf, opts) => {
     const a = el.animate(kf, { fill: "forwards", easing: "linear", ...opts });
     anims.add(a);
@@ -1323,7 +1341,12 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
       ensurePaperFont(family, 1200), ensurePaperFont(sansFamily, 1200), modern ? false : ensurePaperFont(condFamily, 1200),
     ]);
     const fonts = { serif: fSerif ? family : null, sans: fSans ? sansFamily : null, cond: fCond ? condFamily : null };
+    // odbitki sesji są potrzebne wcześniej (pierwsze wyzwolenie ~0,5 s) niż strona (koniec sesji)
+    if (printsReady) await printsReady;
+    // klatka z wystartowanymi animacjami (najazd / sesja) idzie najpierw do kompozytora, rysowanie w następnym zadaniu —
+    // nie w wywołaniu rAF (wtedy blokowało tę klatkę i start animacji)
     await frame();
+    await task();
     if (closed) return false;
     const t0 = performance.now();
     const aw = Math.max(200, VW - safeA.left - safeA.right), ah = Math.max(200, VH - safeA.top - safeA.bottom);
@@ -1338,16 +1361,9 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
     const page = modern
       ? paintModern({ W, photo, aspect: photo.width / photo.height, data: d, seed, fonts, lite, shots: pageShots })
       : paintPage({ W, photo, aspect: photo.width / photo.height, data: d, seed, fonts, lite, cssScale: W / restW, shots: pageShots });
-    // odbitki sesji fotografa liczone tu, przed synchronizacją (klasyczna: raster druku, współczesna: barwny wydruk) —
-    // w trakcie sesji nic ciężkiego się nie maluje
-    if (multi) prints = shots.map((s) => {
-      const c = mk(printW, printH), g = c.getContext("2d");
-      if (modern) { g.filter = "saturate(1.18) contrast(1.06)"; g.drawImage(s.image, 0, 0, printW, printH); g.filter = "none"; }
-      else halftone(g, s.image, { x: 0, y: 0, w: printW, h: printH }, lite ? 2.5 : 2.8, inkFor(d.paper), d.paper);
-      g.getImageData(0, 0, 1, 1); // wymuś wykonanie rysowania teraz (płótno GPU rysuje leniwie — inaczej koszt spadłby na start sesji)
-      return c;
-    });
     stats.pageW = W; stats.buildMs = Math.round(performance.now() - t0);
+    await task(); // reszta (tło, cień, warstwa filmowa) w osobnym zadaniu
+    if (closed) return false;
 
     // tło: stara scena mocno rozmyta i przyciemniona (głębia ostrości), statyczne
     const bw = 360, bh = Math.max(1, Math.round((bw * VH) / VW));
@@ -1379,7 +1395,7 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
     sg.fillStyle = "rgba(0,0,0,0.9)"; sg.fillRect(ix, iy, sw - 2 * ix, sh - 2 * iy);
     sc.style.cssText = `position:absolute;left:${-pad * 100}%;top:${-pad * 100}%;width:${100 + pad * 200}%;height:${100 + pad * 200}%;display:block;transform-origin:50% 50%;opacity:0;will-change:transform,opacity;`;
     // warstwa filmowa (światło, taśma, przeostrzenie) + smugi ruchu: zmniejszone, wstępnie rozmyte kopie strony
-    const cine = reduced ? null : cinema({ page: page.canvas, restW, restH, VW, VH, modern, lite, seed });
+    const cine = reduced ? null : cinema({ page: page.canvas, restW, restH, VW, VH, modern, lite, seed, cut: PAGE_CORNER / 1000 });
     const ghosts = cine?.ghosts ?? [];
     for (const gc of ghosts) gc.style.cssText = `${ABS}transform-origin:50% 50%;opacity:0;will-change:transform,opacity;`;
     rig.append(sc, ...ghosts, sheet);
@@ -1394,6 +1410,12 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
     const flash = document.createElement("div");
     flash.style.cssText = `${ABS}background:#fffaf0;opacity:0;mix-blend-mode:screen;`;
     built = { ...cine?.els, backdrop, rig, sheet, shadow: sc, ghosts, flash, photoCss, restW, restH, S, T0, page, cine };
+    // klatki kluczowe obu faz liczone zawczasu, każda w osobnym zadaniu po gotowości (nie opóźniają `ready`): start fazy to
+    // już tylko uruchomienie animacji, bez setek wywołań funkcji stanu w klatce startu
+    if (!reduced) (async () => {
+      await task(); if (closed) return; kfCache.press ??= sample(pressFrame, PRESS_MS);
+      await task(); if (closed) return; kfCache.spin ??= sample(spinFrame, d.spinSec * 1000);
+    })().catch(() => {});
     return true;
   })().catch((e) => { console.error("newspaper | build", e); return false; });
 
@@ -1471,18 +1493,40 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
     const ls = Math.log(A.s) + (Math.log(B.s) - Math.log(A.s)) * e - Math.min(0.5, 0.85 * dist) * Math.sin(Math.PI * e);
     return { s: Math.exp(ls), cx: A.cx + (B.cx - A.cx) * e, cy: A.cy + (B.cy - A.cy) * e };
   };
+  /** Przesunięcie kadru zdjęcia grupy k (px ekranu), gdy grupa leży pod interfejsem: kadr przy krawędzi sceny nie może
+   *  się już przesunąć (fitFrame trzyma go w scenie), więc grupa przy krawędzi mapy wypadała pod pasek boczny / kolumnę
+   *  narzędzi. Kamera dosuwa ją do wolnego obszaru o najwyżej szerokość tego UI (odsłonięty pas leży pod tym UI). */
+  const nudgeOf = (k) => {
+    if (k < 0 || k >= nShots) return { x: 0, y: 0 };
+    const f = shots[k].focus;
+    if (!f) return { x: 0, y: 0 };
+    const axis = (a0, a1, lo, hi, padLo, padHi) => {
+      if (a1 - a0 > hi - lo) return clamp((lo + hi) / 2 - (a0 + a1) / 2, -padHi, padLo); // szersza niż wolny obszar: środek
+      if (a0 < lo) return Math.min(lo - a0, padLo);
+      if (a1 > hi) return -Math.min(a1 - hi, padHi);
+      return 0;
+    };
+    return {
+      x: axis(f.x * VW, (f.x + f.w) * VW, safeA.left, VW - safeA.right, safeA.left, safeA.right),
+      y: axis(f.y * VH, (f.y + f.h) * VH, safeA.top, VH - safeA.bottom, safeA.top, safeA.bottom),
+    };
+  };
+  const nudges = Array.from({ length: nShots }, (_, k) => nudgeOf(k));
+  const nudge = (k) => (k < 0 || k >= nShots ? { x: 0, y: 0 } : nudges[k]);
   const camAt = (ms) => {
-    let c;
+    let c, n = { x: 0, y: 0 };
     if (ms < startOf(0)) { c = camOf(f0); c.s *= 1 + 0.012 * smooth(0, SH.lead, ms); } // podniesienie aparatu
     else {
       let k = 0;
       while (k < nShots && ms >= startOf(k + 1)) k++;
-      c = camBetween(frameOf(k - 1), frameOf(k), aimEase(clamp((ms - startOf(k)) / aimOf(k), 0, 1)));
+      const e = aimEase(clamp((ms - startOf(k)) / aimOf(k), 0, 1)), na = nudge(k - 1), nb = nudge(k);
+      c = camBetween(frameOf(k - 1), frameOf(k), e);
+      n = { x: na.x + (nb.x - na.x) * e, y: na.y + (nb.y - na.y) * e };
     }
     // odrzut przy wyzwoleniu: kilka px w dół, gaśnie w ~150 ms
     let kick = 0;
     for (const f of fires) if (ms >= f) kick = Math.exp(-(ms - f) / 50);
-    return { ...c, tx: VW / 2 - c.s * c.cx * VW, ty: VH / 2 - c.s * c.cy * VH + 3.5 * kick };
+    return { ...c, tx: VW / 2 - c.s * c.cx * VW + n.x, ty: VH / 2 - c.s * c.cy * VH + n.y + 3.5 * kick };
   };
   const onScreen = (c, r) => ({ x: c.tx + c.s * r.x * VW, y: c.ty + c.s * r.y * VH, w: c.s * r.w * VW, h: c.s * r.h * VH });
 
@@ -1494,13 +1538,35 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
   })();
   const pileSize = clamp(Math.min(VW, VH) * 0.2, 110, 210);
   const PILE_A = [-6, 4.5, -2.5, 7];
-  const cards = multi ? shots.map((s, k) => {
-    const c = slotAspect[k] ? focusCrop(VW, VH, s.focus, slotAspect[k]) : { sx: 0, sy: 0, sw: VW, sh: VH };
-    const sc = pileSize / Math.sqrt(c.sw * c.sh);
-    return {
-      crop: c, cl: { x: c.sx + c.sw / 2, y: c.sy + c.sh / 2 }, s: sc, a: PILE_A[k % 4] * dir,
-      at: { x: VW - safeA.right - pileSize * 0.95 - k * pileSize * 0.3, y: VH - safeA.bottom - pileSize * 0.78 - (k % 2) * pileSize * 0.12 },
+  const crops = multi ? shots.map((s, k) => (slotAspect[k] ? focusCrop(VW, VH, s.focus, slotAspect[k]) : { sx: 0, sy: 0, sw: VW, sh: VH })) : [];
+  /** Środek odbitki k na stosie w rogu (sx, sy: 1 = prawy/dolny, -1 = lewy/górny) wolnego obszaru. */
+  const pileAt = (k, sx, sy) => ({
+    x: sx > 0 ? VW - safeA.right - pileSize * 0.95 - k * pileSize * 0.3 : safeA.left + pileSize * 0.95 + k * pileSize * 0.3,
+    y: sy > 0 ? VH - safeA.bottom - pileSize * 0.78 - (k % 2) * pileSize * 0.12 : safeA.top + pileSize * 0.78 + (k % 2) * pileSize * 0.12,
+  });
+  // róg stosu: domyślnie prawy dolny; gdy zasłaniałby sfotografowane grupy na zdjęciu sceny (stos leży nad nim aż do
+  // prasy), wybierz róg, który zasłania ich najmniej (kolejność przy remisie: PD, LD, PG; lewy górny róg zajmuje nawigacja scen)
+  const pileCorner = (() => {
+    if (!multi || !nShots) return [1, 1];
+    const groups = shots.map((_, k) => { const r = aimRect(k); return { x: r.x * VW, y: r.y * VH, w: r.w * VW, h: r.h * VH }; });
+    const cover = (sx, sy) => {
+      let sum = 0;
+      for (let k = 0; k < nShots; k++) {
+        const a = pileAt(k, sx, sy), c = crops[k], asp = Math.sqrt(c.sw / c.sh), w = pileSize * asp * 1.08, h = (pileSize / asp) * 1.08;
+        for (const g of groups) sum += Math.max(0, Math.min(a.x + w / 2, g.x + g.w) - Math.max(a.x - w / 2, g.x)) * Math.max(0, Math.min(a.y + h / 2, g.y + g.h) - Math.max(a.y - h / 2, g.y));
+      }
+      return sum;
     };
+    let best = null;
+    for (const [sx, sy] of [[1, 1], [-1, 1], [1, -1]]) { const v = cover(sx, sy); if (!best || v < best.v - 1) best = { v, sx, sy }; }
+    return [best.sx, best.sy];
+  })();
+  stats.shotNudge = nudges.map((n) => [Math.round(n.x), Math.round(n.y)]);
+  stats.pileCorner = multi ? `${pileCorner[1] > 0 ? "bottom" : "top"}-${pileCorner[0] > 0 ? "right" : "left"}` : null;
+  const cards = multi ? shots.map((s, k) => {
+    const c = crops[k];
+    const sc = pileSize / Math.sqrt(c.sw * c.sh);
+    return { crop: c, cl: { x: c.sx + c.sw / 2, y: c.sy + c.sh / 2 }, s: sc, a: PILE_A[k % 4] * dir, at: pileAt(k, pileCorner[0], pileCorner[1]) };
   }) : [];
   /** Transform odbitki (początek układu = lewy górny róg ekranu w chwili zdjęcia): punkt `cl` trafia w `at`, skala `s`, obrót `a`. */
   const cardTf = (cl, at, s, a) => {
@@ -1509,14 +1575,15 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
   };
   const pileTf = (k) => cardTf(cards[k].cl, cards[k].at, cards[k].s, cards[k].a);
 
-  /** Rozmiar odbitki pełnoekranowej (px płótna) i gotowe rastry druku (klasyczna; liczone w `ready`). */
+  /** Rozmiar odbitki pełnoekranowej (px płótna) i gotowe rastry druku (klasyczna). */
   const printW = Math.round(Math.min(lite ? 640 : 960, VW * (lite ? 0.6 : 0.75))), printH = Math.round((printW * VH) / VW);
-  let prints = null;
+  const prints = [];
   let shootEls = null;
-  /** Odbitka: gotowy raster druku z `ready` (klasyczna) albo szybka wersja filtrem (współczesna / awaryjnie). */
+  /** Odbitka: gotowy raster druku (klasyczna) albo szybka wersja filtrem (współczesna — to jest jej wygląd; klasyczna — tylko
+   *  na chwilę, gdyby raster nie zdążył przed wyzwoleniem: po jego wyliczeniu karta jest przemalowana). */
   const paintCard = (k) => {
     const s = shots[k], el = shootEls.cards[k], fc = el.fullC, g = fc.getContext("2d");
-    if (prints?.[k]) g.drawImage(prints[k], 0, 0, fc.width, fc.height);
+    if (prints[k]) g.drawImage(prints[k], 0, 0, fc.width, fc.height);
     else {
       g.save();
       g.filter = modern ? "saturate(1.18) contrast(1.06)" : "grayscale(1) contrast(1.2) brightness(1.05)";
@@ -1526,6 +1593,25 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
     const c = cards[k].crop, kx = fc.width / VW, tc = el.trimC;
     tc.getContext("2d").drawImage(fc, c.sx * kx, c.sy * kx, c.sw * kx, c.sh * kx, 0, 0, tc.width, tc.height);
   };
+  /** Rastry druku odbitek klasycznych: od razu po starcie, każda w osobnym zadaniu, w kolejności wyzwoleń (pierwsza jest
+   *  potrzebna po ~0,5 s sesji). Gotowa odbitka trafia na swoją kartę, jeśli sesja już ją pokazała. */
+  const printsReady = multi && !modern ? (async () => {
+    await frame(); // najpierw klatka startująca sesję
+    const t0 = performance.now(), ink = inkFor(d.paper), cell = lite ? 2.5 : 2.8;
+    // wszystkie odbitki naraz do wątku roboczego (liczy po kolei, pierwsza wraca pierwsza); bez wątku — tu, zadanie po zadaniu
+    const off = shots.map((s) => halftoneOffThread(s.image, printW, printH, cell, ink, d.paper));
+    let offThread = 0;
+    for (let k = 0; k < shots.length; k++) {
+      const bm = await off[k];
+      if (closed) { bm?.close?.(); continue; }
+      const c = mk(printW, printH), g = c.getContext("2d");
+      if (bm) { g.drawImage(bm, 0, 0); bm.close?.(); offThread++; }
+      else { await task(); if (closed) continue; halftone(g, shots[k].image, { x: 0, y: 0, w: printW, h: printH }, cell, ink, d.paper); }
+      prints[k] = c;
+      if (shootEls) paintCard(k);
+    }
+    stats.printsMs = Math.round(performance.now() - t0); stats.printsOffThread = offThread;
+  })().catch((e) => console.error("newspaper | prints", e)) : null;
   const shootLayers = () => {
     if (shootEls) return shootEls;
     const els = { shot: [], corner: [], lock: [], card: [], full: [], trim: [], cards: [] };
@@ -1534,7 +1620,7 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
     const place = (el, r, op = 1) => { el.style.cssText = `position:absolute;display:block;left:${(r.x * VW).toFixed(2)}px;top:${(r.y * VH).toFixed(2)}px;width:${(r.w * VW).toFixed(2)}px;height:${(r.h * VH).toFixed(2)}px;opacity:${op};`; };
     if (reduced) {
       // spokojnie: zdjęcia na pełnym ekranie, przenikania
-      for (const s of shots) { s.image.style.cssText = `${ABS}opacity:0;will-change:opacity;`; els.shot.push(s.image); }
+      shots.forEach((s, k) => { const n = nudge(k); s.image.style.cssText = `${ABS}opacity:0;will-change:opacity;transform:translate(${n.x.toFixed(1)}px, ${n.y.toFixed(1)}px);`; els.shot.push(s.image); });
       photo.style.cssText = `${ABS}opacity:0;will-change:opacity;`;
       flat.append(...els.shot, photo);
     } else {
@@ -1594,8 +1680,10 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
       deck.append(box);
       els.card.push(box); els.full.push(full); els.trim.push(trim); els.cards.push({ fullC, trimC });
     }
+    // błysk POD odbitkami: rozświetla scenę w chwili wyzwolenia, a odbitka wywołuje się nad nim czysta (błysk nad
+    // odbitką wypierał jej raster — klasyczny druk na pełnym ekranie wychodził wyprany)
+    if (els.flash) root.append(els.flash);
     root.append(deck);
-    if (els.flash) root.append(els.flash); // błysk nad odbitką, która właśnie powstaje
     els.deck = deck;
     first.style.transformOrigin = "0 0";
     shootEls = els;
@@ -1623,8 +1711,8 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
       // celownik stoi na grupie bieżącego zdjęcia (bez ruchu), odbitka pojawia się na stosie, gdy zdjęcie „zrobione”
       let k = 0;
       while (k < n - 1 && ms >= cut(k + 1)) k++;
-      const f = shots[k]?.focus ?? unit, vis = n ? smooth(cut(k), cut(k) + F, ms) * (1 - smooth(cut(n), cut(n) + F, ms)) : 0;
-      corners({ x: f.x * VW, y: f.y * VH, w: f.w * VW, h: f.h * VH }, vis);
+      const f = shots[k]?.focus ?? unit, nk = nudge(k), vis = n ? smooth(cut(k), cut(k) + F, ms) * (1 - smooth(cut(n), cut(n) + F, ms)) : 0;
+      corners({ x: f.x * VW + nk.x, y: f.y * VH + nk.y, w: f.w * VW, h: f.h * VH }, vis);
       for (let j = 0; j < n; j++) out.card.push({ opacity: +smooth(cut(j) + F + 120, cut(j) + 2 * F + 120, ms).toFixed(4) });
       out.full = []; out.trim = [];
       return out;
@@ -1656,8 +1744,8 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
       if (!flashOk[j] || ms < f) return;
       const x = ms - f, amp = j < n ? 0.5 : 0.34;
       fl = x < 25 ? amp * (x / 25) : amp * (1 - clamp((x - 25) / 210, 0, 1)) ** 2;
-      const a = j < n ? shots[j].focus ?? unit : unit;
-      at = { x: (a.x + a.w / 2) * VW, y: (a.y + a.h / 2) * VH };
+      const a = j < n ? shots[j].focus ?? unit : unit, nj = nudge(j);
+      at = { x: (a.x + a.w / 2) * VW + nj.x, y: (a.y + a.h / 2) * VH + nj.y };
     });
     out.flash = { transform: `translate(${(at.x - els.flashSize / 2).toFixed(1)}px, ${(at.y - els.flashSize / 2).toFixed(1)}px) scale(${(els.flashSize / 256).toFixed(4)})`, opacity: +fl.toFixed(4) };
     // odbitki: w chwili wyzwolenia klatka staje się odbitką na cały ekran, potem odlatuje na stos i po drodze jest przycinana
@@ -1666,8 +1754,11 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
       // „wyskok” odbitki w czasie stopklatki: ramka papieru pojawia się dookoła, zanim odbitka odleci
       const pop = 1 - 0.07 * expoOut(clamp((ms - f) / SH.freeze, 0, 1));
       const s = pop * Math.exp(Math.log(cd.s) * e), a = cd.a * e;
-      const at2 = { x: cd.cl.x + (cd.at.x - cd.cl.x) * e, y: cd.cl.y + (cd.at.y - cd.cl.y) * e - VH * 0.07 * Math.sin(Math.PI * e) };
-      out.card.push({ transform: ms < f ? "translate(0px, 0px) rotate(0deg) scale(1)" : cardTf(cd.cl, at2, s, a), opacity: +smooth(f, f + 30, ms).toFixed(4) });
+      // start odbitki = kadr na ekranie w chwili zdjęcia (z przesunięciem kamery spod interfejsu)
+      const nj = nudge(j), sx = cd.cl.x + nj.x, sy = cd.cl.y + nj.y;
+      const at2 = { x: sx + (cd.at.x - sx) * e, y: sy + (cd.at.y - sy) * e - VH * 0.07 * Math.sin(Math.PI * e) };
+      // odbitka wywołuje się tuż po szczycie błysku (błysk leży pod nią — najpierw widać rozświetloną scenę)
+      out.card.push({ transform: ms < f ? `translate(${nj.x.toFixed(2)}px, ${nj.y.toFixed(2)}px) rotate(0deg) scale(1)` : cardTf(cd.cl, at2, s, a), opacity: +smooth(f + 25, f + 85, ms).toFixed(4) });
       out.full.push({ opacity: +(1 - smooth(0.35, 0.75, u)).toFixed(4) });
       out.trim.push({ opacity: +smooth(0.3, 0.65, u).toFixed(4) });
     }
@@ -1858,7 +1949,7 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
       if (multi) deckToPage(); // odbitki ze stosu lecą w swoje miejsca na stronie
       b.cine?.loops(play); // ziarno taśmy i migotanie projektora (do końca przejścia)
       let last = null;
-      for (const [k, kf] of Object.entries(sample(pressFrame, PRESS_MS))) last = play(layer(k), kf, { duration: PRESS_MS });
+      for (const [k, kf] of Object.entries(kfCache.press ??= sample(pressFrame, PRESS_MS))) last = play(layer(k), kf, { duration: PRESS_MS });
       await last?.finished.catch(() => {});
       if (closed) return;
       b.flash.remove();
@@ -1883,7 +1974,7 @@ export function createNewspaper({ host = document.body, photo, cover = null, cro
     }
     const dur = d.spinSec * 1000;
     let last = null;
-    for (const [k, kf] of Object.entries(sample(spinFrame, dur))) last = play(layer(k), kf, { duration: dur });
+    for (const [k, kf] of Object.entries(kfCache.spin ??= sample(spinFrame, dur))) last = play(layer(k), kf, { duration: dur });
     await last?.finished.catch(() => {}); // wszystkie warstwy mają ten sam czas
     if (closed) return;
     dispose();

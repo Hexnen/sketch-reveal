@@ -135,6 +135,8 @@ const mk = (tag, cls, text) => { const e = document.createElement(tag); if (cls)
 const enter = (el, kf, o) => el.animate(kf, { fill: "backwards", ...o });
 /** Zejście: końcowa klatka zostaje (forwards) aż do usunięcia elementu. */
 const leave = (el, kf, o) => el.animate(kf, { fill: "forwards", ...o });
+/** Usuń element po animacji zejścia — albo najpóźniej po `ms` (karta w tle wstrzymuje animacje i `finished` nie przychodzi). */
+const dropAfter = (el, a, ms = 1200) => { const t = setTimeout(() => el.remove(), ms); settle(a).then(() => { clearTimeout(t); el.remove(); }); };
 
 const STOP_SVG = `<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="3.5" y="3.5" width="9" height="9" rx="1"/></svg>`;
 
@@ -164,6 +166,8 @@ function headlineParts(b) {
 }
 /** Stary tytuł jako duch nad nowym (do animacji zmiany tytułu). */
 function headlineGhost(b, text) {
+  // najwyżej jeden duch naraz: szybkie zmiany tytułu (albo karta w tle) nie zostawiają stosu starych tytułów
+  for (const old of b.hlMask.querySelectorAll(".srn-headline-ghost")) old.remove();
   const g = mk("p", "srn-headline srn-headline-ghost", text);
   g.setAttribute("aria-hidden", "true");
   b.hlMask.append(g);
@@ -231,7 +235,7 @@ const BROADCAST = {
   headlineSwap(b, oldText) {
     // stary tytuł odjeżdża w górę, nowy wjeżdża od dołu (jak zmiana pozycji na pasku)
     const ghost = headlineGhost(b, oldText);
-    settle(leave(ghost, [{ transform: "none" }, { transform: "translateY(-115%)" }], { duration: 260, easing: EASE_IN })).then(() => ghost.remove());
+    dropAfter(ghost, leave(ghost, [{ transform: "none" }, { transform: "translateY(-115%)" }], { duration: 260, easing: EASE_IN }));
     enter(b.headline, [{ transform: "translateY(115%)" }, { transform: "none" }], { duration: 460, delay: 90, easing: EASE_OUT });
   },
   segment(b, item) {
@@ -260,6 +264,28 @@ const BROADCAST = {
 };
 
 /* ---------------------------------------------------------------- wire (dalekopis) */
+/**
+ * Prawe krawędzie (px, względem początku tekstu) po 0…n znakach treści `lab` + `tx` (jeden odczyt układu, potem same
+ * prostokąty zakresów). Element [k] = szerokość pierwszych k znaków (jednostki UTF-16 — jak slice przy pisaniu).
+ */
+function typedEnds(lab, tx) {
+  const nodes = [lab.firstChild, tx.firstChild].filter((n) => n?.nodeType === 3 && n.length);
+  const total = nodes.reduce((a, n) => a + n.length, 0), ends = new Float32Array(total + 1);
+  if (!total) return ends;
+  const r = document.createRange();
+  r.setStart(nodes[0], 0); r.setEnd(nodes[0], 0);
+  const x0 = r.getBoundingClientRect().left;
+  let k = 0;
+  for (const n of nodes) {
+    for (let i = 0; i < n.length; i++) {
+      r.setStart(n, i); r.setEnd(n, i + 1);
+      const right = r.getBoundingClientRect().right - x0;
+      k++;
+      ends[k] = Math.max(ends[k - 1], right);
+    }
+  }
+  return ends;
+}
 const WIRE = {
   build(b) {
     b.pack = mk("div", "srn-pack");
@@ -322,8 +348,14 @@ const WIRE = {
     const cps = typeCps(sp), t0 = performance.now();
     let k = 0;
     frame.classList.add("srn-typing");
+    // jeden pomiar na wiadomość (zamiast wymuszonego układu strony co znak): szerokość taśmy z całym tekstem i prawe
+    // krawędzie kolejnych znaków → szerokość taśmy po k znakach = pełna − (krawędź ostatniego − krawędź k-tego)
+    lab.textContent = head; tx.textContent = item.text;
+    const ends = typedEnds(lab, tx), fullW = type.scrollWidth, room = vp.clientWidth - b._u * 1.4;
+    lab.textContent = ""; tx.textContent = "";
+    const endAll = ends[ends.length - 1];
     const advance = () => {
-      const over = type.scrollWidth - vp.clientWidth + b._u * 1.4;
+      const over = fullW - (endAll - ends[Math.min(k, ends.length - 1)]) - room;
       type.style.transform = over > 0 ? `translateX(${-over}px)` : "";
     };
     while (k < full.length) {
@@ -342,12 +374,13 @@ const WIRE = {
   },
   headlineSwap(b, oldText) {
     // stary pasek z tytułem odkleja się i odpada, nowy spada na jego miejsce
+    for (const old of b.strap.querySelectorAll(".srn-strap-ghost")) old.remove();
     const ghost = b.strapIn.cloneNode(true);
     ghost.classList.add("srn-strap-ghost");
     ghost.setAttribute("aria-hidden", "true");
     ghost.querySelector(".srn-headline").textContent = oldText;
     b.strap.append(ghost);
-    settle(leave(ghost, [{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(-55%) rotate(-5deg)" }], { duration: 260, easing: EASE_IN })).then(() => ghost.remove());
+    dropAfter(ghost, leave(ghost, [{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(-55%) rotate(-5deg)" }], { duration: 260, easing: EASE_IN }));
     WIRE.strapIn(b, 140);
   },
   segment(b, item) {
@@ -417,7 +450,7 @@ const SIGNAL = {
       const d = old ? 170 : 0;
       // wiązka jedzie do końca tekstu (albo do prawej krawędzi, gdy tekst jest dłuższy niż pasek)
       const chip = frame.querySelector(".srn-chip"), tx = frame.querySelector(".srn-text");
-      const run = Math.max(40, Math.min(b.slot.clientWidth, (chip?.offsetWidth ?? 0) + (tx?.offsetWidth ?? 0) + b._u * 1.7));
+      const run = Math.max(40, Math.min(b._slotWidth, (chip?.offsetWidth ?? 0) + (tx?.offsetWidth ?? 0) + b._u * 1.7));
       const beam = mk("i", "srn-beam");
       frame.append(beam);
       const t = 460;
@@ -431,7 +464,7 @@ const SIGNAL = {
   },
   headlineSwap(b, oldText) {
     const ghost = headlineGhost(b, oldText);
-    settle(leave(ghost, [{ clipPath: "inset(0 0 0 0)", opacity: 1 }, { clipPath: "inset(50% 0 50% 0)", opacity: 0 }], { duration: 220, easing: EASE_IN })).then(() => ghost.remove());
+    dropAfter(ghost, leave(ghost, [{ clipPath: "inset(0 0 0 0)", opacity: 1 }, { clipPath: "inset(50% 0 50% 0)", opacity: 0 }], { duration: 220, easing: EASE_IN }));
     enter(b.headline, [{ clipPath: SHUT }, { clipPath: OPEN }], { duration: 480, delay: 160, easing: "cubic-bezier(0.25, 0.6, 0.2, 1)" });
   },
   segment(b, item) {
@@ -533,7 +566,8 @@ export class NewsBar {
     this.host = host; this.reduced = !!reduced; this.lite = !!lite;
     this.strings = { live: "LIVE", stop: "Take down", region: "News", ...strings };
     this.onStop = onStop; this.onFinish = onFinish;
-    this.state = "idle"; this._gen = 0; this._timers = new Set(); this._raf = 0; this._wake = null;
+    this.state = "idle"; this._gen = 0; this._timers = new Set(); this._raf = 0; this._wake = null; this._stale = new Set();
+    this._ro = null; this._slotW = 0; this._exitT = 0;
     this._cur = null; this._frame = null; this._lastIdx = 0; this._shown = new Set(); this._bounds = null;
     this.finished = new Promise((res) => { this._resolveFinished = res; });
   }
@@ -551,6 +585,7 @@ export class NewsBar {
     this._applyLook(this.data);
     if (this._bounds) this.setBounds(this._bounds);
     this.host.append(root);
+    this._observe();
   }
 
   /** Przycisk „zdejmij” (tylko GM / podgląd): jedyne miejsce paska, które łapie wskaźnik. */
@@ -598,14 +633,28 @@ export class NewsBar {
     }
   }
 
-  /** Jednostka skali paska w px (= font-size paska; rośnie z wysokością okna i rozmiarem presetu). Odczyt co ≥ 500 ms. */
+  /** Jednostka skali paska w px (= font-size paska; rośnie z wysokością okna i rozmiarem presetu). Czytana tylko po
+   *  zmianie: wygląd/rozmiar (_applyLook) albo zmiana rozmiaru paska (ResizeObserver) — nie co kilkaset ms. */
   get _u() {
-    const now = performance.now();
-    if (!this._uAt || now - this._uAt > 500) {
-      this._uAt = now;
+    if (!this._uAt) {
+      this._uAt = 1;
       this._uPx = (this.line && parseFloat(getComputedStyle(this.line).fontSize)) || 23;
     }
     return this._uPx;
+  }
+  /** Szerokość pola tekstu (px) z pamięci — odświeżana po zmianie rozmiaru (ResizeObserver), nie czytana co klatkę przesuwu. */
+  get _slotWidth() {
+    if (!this._slotW || !this._ro) this._slotW = this.slot?.clientWidth ?? 0;
+    return this._slotW;
+  }
+  /** Obserwator rozmiaru pola tekstu i linii paska: unieważnia zapamiętaną szerokość pola i jednostkę skali. */
+  _observe() {
+    this._ro?.disconnect(); this._ro = null;
+    this._slotW = 0; this._uAt = 0;
+    if (typeof ResizeObserver !== "function") return;
+    this._ro = new ResizeObserver(() => { this._slotW = 0; this._uAt = 0; });
+    if (this.slot) this._ro.observe(this.slot);
+    if (this.line && this.line !== this.slot) this._ro.observe(this.line);
   }
   _style() { return this.reduced ? "flip" : this.data.style; }
   _alive(gen) { return gen === this._gen && this.state === "on"; }
@@ -748,7 +797,7 @@ export class NewsBar {
     const track = this._track = mk("div", "srn-track");
     this.slot.append(track);
     const segs = [];
-    let offset = 0, spawnX = this.slot.clientWidth, last = performance.now();
+    let offset = 0, spawnX = this._slotWidth, last = performance.now();
     const step = (now) => {
       if (!this._alive(gen)) return;
       if (this._style() !== "crawl") { // zmiana stylu: przesuw gaśnie, startuje klapka
@@ -757,7 +806,7 @@ export class NewsBar {
         return this._flipLoop(gen);
       }
       const dt = Math.min(1, Math.max(0, (now - last) / 1000)); last = now;
-      const W = this.slot.clientWidth;
+      const W = this._slotWidth;
       offset -= crawlPxps(this._u, this.data.speed) * dt;
       if (!segs.length && spawnX + offset < W) spawnX = W - offset; // pusto: następna pozycja wjeżdża od prawej krawędzi
       while (spawnX + offset < W + 16) {
@@ -809,8 +858,11 @@ export class NewsBar {
     this._wake?.(); this._wake = null;
     this._scanAnim?.cancel(); this._scanAnim = null;
     const old = this.el;
-    settle(leave(old, [{ opacity: 1 }, { opacity: 0 }], { duration: 220, easing: "ease-in" })).then(() => old.remove());
-    setTimeout(() => old.remove(), 1200);
+    // stary pasek: usunięty po zejściu albo najpóźniej po 1,2 s (karta w tle); destroy() i koniec zejścia zdejmują go od razu
+    this._stale.add(old);
+    const drop = () => { clearTimeout(t); old.remove(); this._stale.delete(old); };
+    const t = setTimeout(drop, 1200);
+    settle(leave(old, [{ opacity: 1 }, { opacity: 0 }], { duration: 220, easing: "ease-in" })).then(drop);
     this._frame = null; this._track = null; this._cur = null;
     this._build();
     this._entry();
@@ -835,15 +887,16 @@ export class NewsBar {
       done = [leave(this.el, [{ opacity: 1 }, { opacity: 0 }], { duration: 200, easing: "ease-in" })];
     } else done = this.look.exit(this);
     const finalize = () => {
+      clearTimeout(this._exitT); this._exitT = 0;
       if (this.state === "gone") return;
       this._scanAnim?.cancel();
-      this.el.remove();
+      this._teardown();
       this.state = "gone";
       this._resolveFinished();
     };
     Promise.all(done.map(settle)).then(finalize);
     // karta w tle wstrzymuje animacje (finished nie przychodzi) — pasek i tak znika najpóźniej po chwili
-    setTimeout(finalize, 1600);
+    this._exitT = setTimeout(finalize, 1600);
     return this.finished;
   }
 
@@ -853,10 +906,19 @@ export class NewsBar {
     cancelAnimationFrame(this._raf);
     for (const t of this._timers) clearTimeout(t);
     this._timers.clear();
+    clearTimeout(this._exitT); this._exitT = 0;
     this._scanAnim?.cancel();
-    this.el?.remove();
+    this._teardown();
     this.state = "gone";
     this._resolveFinished();
+  }
+
+  /** Zdejmij pasek z DOM razem z niedokończonymi starymi paskami (zmiana wyglądu) i obserwatorem rozmiaru. */
+  _teardown() {
+    this._ro?.disconnect(); this._ro = null;
+    for (const old of this._stale) old.remove();
+    this._stale.clear();
+    this.el?.remove();
   }
 }
 

@@ -8,7 +8,7 @@
 import { MODULE_ID } from "./config.mjs";
 import {
   DEFAULT_NEWSPAPER, HOLD_MS, NEWSPAPER_DEFAULT_TEXT, NEWSPAPER_LIMITS, NEWSPAPER_SLOTS, SHOT_CAP, cameraEase, clusterRects, coverView, createNewspaper,
-  detailSpots, ensurePaperFont, newspaperText, photoCrop, prefersReducedMotion, REVEAL_ZOOM, revealCameraMs, sameRect, sanitizeNewspaper, shotFrame, usDate,
+  detailSpots, newspaperText, photoCrop, prefersReducedMotion, prewarmNewspaper, REVEAL_ZOOM, revealCameraMs, sameRect, sanitizeNewspaper, shotFrame, usDate,
 } from "./fx/newspaper.mjs";
 import { awaitTransitionGo, prepareTransitionSync, transitionReadyOnly } from "./play.mjs";
 import { clientPerf, getPreset, resolveNewspaper } from "./store.mjs";
@@ -70,6 +70,11 @@ export function captureView({ shots: shotStyle = null, safe = null } = {}) {
   if (!/^#[0-9a-f]{6}$/i.test(bg ?? "")) bg = /^#[0-9a-f]{6}$/i.test(canvas.scene?.backgroundColor ?? "") ? canvas.scene.backgroundColor : "#000";
   const shot = (resolution = res) => {
     const rt = PIXI.RenderTexture.create({ width, height, resolution });
+    // przezroczyste miejsca (poza sceną) mają kolor tła płótna, jak na ekranie: tekstura czyszczona od razu tym kolorem
+    // (jak ekran), więc odczyt z GPU jest gotowym zdjęciem — bez drugiego płótna i kopii (zapas: kopia na tło, gdy ta
+    // wersja PIXI nie ma koloru czyszczenia tekstury)
+    let opaque = false;
+    try { const bt = rt.baseTexture; bt.clearColor = bg; opaque = (bt.clear?.alpha ?? 0) >= 1; } catch { /* */ }
     const rootVisible = canvas.root?.visible;
     try {
       if (canvas.root) canvas.root.visible = true;
@@ -77,7 +82,7 @@ export function captureView({ shots: shotStyle = null, safe = null } = {}) {
     } finally { if (canvas.root) canvas.root.visible = rootVisible; }
     const src = r.extract.canvas(rt);
     rt.destroy(true);
-    // przezroczyste miejsca (poza sceną) mają kolor tła płótna, jak na ekranie
+    if (opaque && src instanceof HTMLCanvasElement) return src;
     const out = document.createElement("canvas");
     out.width = src.width; out.height = src.height;
     const g = out.getContext("2d");
@@ -254,6 +259,7 @@ function stage(data, { sceneId = null, preview = false } = {}) {
     if (t.closed) return;
     t.closed = true;
     clearTimeout(t.guard);
+    reportOnce(t); // pominięte przed wspólnym startem: nie każ barierze czekać na ten klient do limitu
     if (t.onKey) document.removeEventListener("keydown", t.onKey, true);
     np.close(fast).finally(() => overlay.remove());
     if (cur === t) cur = null;
@@ -267,6 +273,33 @@ function stage(data, { sceneId = null, preview = false } = {}) {
   t.pressed = np.press().then(() => new Promise((r) => setTimeout(r, HOLD_MS)));
   cur = t;
   return t;
+}
+
+/** Bariera wspólnego startu czeka na „gotowe” od każdego klienta: zgłoś je dokładnie raz, także gdy przebieg kończy się
+ *  wcześniej (pominięcie, błąd, zmiana sceny, karta w tle) — inaczej wszyscy czekają pełny limit (60 s). */
+function reportOnce(t) {
+  if (!t.syncId || t.reported) return;
+  t.reported = true;
+  try { transitionReadyOnly(t.syncId); } catch (e) { console.warn(`${MODULE_ID} | gazeta: zgłoszenie gotowości`, e); }
+}
+
+/** Karta w tle: requestAnimationFrame i animacje WAAPI stoją, więc strona nie dojdzie do końca prasy. */
+const tabHidden = () => document.visibilityState === "hidden";
+function untilHidden() {
+  let on = null;
+  const promise = new Promise((res) => {
+    if (tabHidden()) { res(true); return; }
+    on = () => { if (tabHidden()) res(true); };
+    document.addEventListener("visibilitychange", on);
+  });
+  return { promise, off: () => on && document.removeEventListener("visibilitychange", on) };
+}
+
+/** Przebieg bez efektu (karta w tle): gotowość dla bariery, zdjęcie zasłony bez animacji, docelowy kadr kamery. */
+function dropHidden(t) {
+  last.hidden = true;
+  if (cur === t) cancelNewspaper(); else { reportOnce(t); t.closed = true; }
+  if (!t.framed && canvas?.ready && canvas.scene?.id === t.sceneId) { t.framed = true; frameRevealCamera({ animate: false }); }
 }
 
 /** Hook canvasTearDown: stara scena jeszcze stoi — zrób zrzut i zasłoń, jeśli następna scena gra gazetę. */
@@ -284,6 +317,8 @@ export function onTearDownNewspaper(options) {
  * było puste), ten klient nic nie gra — ale zgłasza gotowość, żeby nie blokować innych w barierze.
  */
 export function attachNewspaper(scene, syncId) {
+  // karta w tle już przy ładowaniu sceny: efekt i tak by stał — od razu bez niego (gotowość dla bariery niżej)
+  if (cur && !cur.preview && cur.sceneId === scene.id && tabHidden()) { last.hidden = true; cancelNewspaper(); }
   if (!cur || cur.preview || cur.sceneId !== scene.id) {
     if (!cur?.preview) cancelNewspaper();
     if (syncId) transitionReadyOnly(syncId);
@@ -308,12 +343,17 @@ export async function runNewspaper() {
   if (canSkip()) { t.overlay.style.pointerEvents = "auto"; t.overlay.style.cursor = "pointer"; t.overlay.addEventListener("click", () => t.close(true)); }
   else t.overlay.style.pointerEvents = "none"; // gracz bez prawa pominięcia: kliki przechodzą do sceny pod spodem
   try {
-    await t.pressed;
+    // karta w tle (inna karta przeglądarki, zminimalizowane okno): prasa stoi — nie blokuj innych, zagraj bez efektu
+    const hide = untilHidden();
+    const wentHidden = await Promise.race([t.pressed.then(() => false), hide.promise]).finally(hide.off);
+    if (wentHidden === true) { dropHidden(t); return; }
     if (t.closed) return;
     const w0 = performance.now();
+    t.reported = true; // awaitTransitionGo zgłasza gotowość sam
     if (t.syncId) await awaitTransitionGo(t.syncId, () => t.closed); // zgłasza gotowość i czeka na wspólny czas startu
     last.waitMs = Math.round(performance.now() - w0);
     if (t.closed) return;
+    if (tabHidden()) { dropHidden(t); return; } // odlot w tle zagrałby dopiero po powrocie do karty, sam
     const s0 = performance.now();
     revealCamera(t);
     await t.np.spin();
@@ -321,6 +361,7 @@ export async function runNewspaper() {
   } catch (e) {
     console.error(`${MODULE_ID} | gazeta`, e);
   } finally {
+    reportOnce(t); // błąd przed wspólnym startem — nie blokuj bariery
     // pominięte przed odlotem: nowa scena i tak bez tła poza sceną (kadr od razu, bez ruchu)
     if (!t.framed && canvas?.ready && canvas.scene?.id === t.sceneId) { t.framed = true; frameRevealCamera({ animate: false }); }
     if (cur === t) { if (t.onKey) document.removeEventListener("keydown", t.onKey, true); t.overlay.remove(); cur = null; }
@@ -343,6 +384,7 @@ export function cancelNewspaper() {
   cur = null;
   t.closed = true;
   clearTimeout(t.guard);
+  reportOnce(t);
   if (t.onKey) document.removeEventListener("keydown", t.onKey, true);
   t.np.dispose(); t.overlay.remove();
 }
@@ -373,8 +415,9 @@ export async function previewNewspaper(raw = DEFAULT_NEWSPAPER) {
   }
 }
 
-/** Krój strony: rozgrzej przy starcie, żeby pierwsza gazeta nie czekała na plik czcionki. */
-export function warmNewspaperFont() { ensurePaperFont(FONT, 4000); ensurePaperFont(SANS, 4000); ensurePaperFont(COND, 4000); }
+/** Krój strony: rozgrzej przy starcie, żeby pierwsza gazeta nie czekała na plik czcionki; potem (w bezczynności) jedna mała
+ *  strona każdego wyglądu — pierwsza prawdziwa gazeta nie płaci za kompilację kodu malowania. */
+export function warmNewspaperFont() { prewarmNewspaper({ family: FONT, sansFamily: SANS, condFamily: COND }); }
 
 /** Do testów z konsoli: ostatni przebieg (czasy zrzutu, budowy, czekania, odlotu) i stan bieżący. */
 export const newspaperDebug = () => ({ ...last, active: !!cur, sceneId: cur?.sceneId ?? null, syncId: cur?.syncId ?? null, preview: cur?.preview ?? null });
@@ -437,7 +480,16 @@ const presetPh = (style) => ({ ...(NEWSPAPER_DEFAULT_TEXT[style] ?? NEWSPAPER_DE
 export function bindNewspaperDraft(root, resolve = null) {
   const draft = root?.querySelector?.('[data-sr="newspaper-draft"]');
   if (!draft) return null;
-  const grow = (t) => { t.style.height = "auto"; t.style.height = `${t.scrollHeight}px`; };
+  // ukryty szkic (nieaktywna zakładka konfiguracji sceny, preset inny niż gazeta) ma scrollHeight 0 — nie zapisuj 0 px,
+  // tylko dopasuj, gdy szkic stanie się widoczny (ResizeObserver: 0 → rozmiar przy pokazaniu)
+  const grow = (t) => { if (!t.getClientRects().length) return; t.style.height = "auto"; t.style.height = `${t.scrollHeight}px`; };
+  let seenW = 0;
+  new ResizeObserver(([e]) => {
+    const w = Math.round(e.contentRect.width);
+    if (!w || w === seenW) return; // tylko pokazanie albo zmiana szerokości (nie wzrost wysokości po grow)
+    seenW = w;
+    for (const t of draft.querySelectorAll("textarea.sr-np-in")) grow(t);
+  }).observe(draft);
   for (const t of draft.querySelectorAll("textarea.sr-np-in")) {
     t.addEventListener("input", () => grow(t));
     t.addEventListener("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); });

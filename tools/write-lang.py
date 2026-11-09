@@ -272,7 +272,7 @@ PL = {
  "NewsDraft.SceneHint": "Wpisz tylko to, co ta scena zmienia. Puste wiersze zostawiają tekst presetu (szary). Wygląd, kolory i obrót są w presecie.",
  "NewsField.masthead": "Winieta", "NewsField.place": "Miejsce", "NewsField.date": "Data", "NewsField.kicker": "Baner",
  "NewsField.headline": "Nagłówek", "NewsField.deck": "Podtytuł", "NewsField.caption": "Podpis",
- "NewsSlot.side": "Bok strony", "NewsSlot.lower": "Pod złożeniem", "NewsSlot.brief": "W skrócie",
+ "NewsSlot.side": "Bok strony", "NewsSlot.lower": "Dół strony", "NewsSlot.brief": "W skrócie",
  "NewsSlot.teaser": "Zapowiedź", "NewsSlot.box": "Ramka", "NewsSlot.card": "Karta",
  "Field.SpinSec": "Czas odlotu (s)", "Field.Turns": "Liczba obrotów", "Field.SpinDir": "Kierunek obrotu",
  "Hint.SpinSec": "Strona formuje się sama w około 1,5 s; tu ustawiasz tylko odlot. Gracze z ograniczonym ruchem (reduced motion) widzą zamiast tego spokojne przenikanie.",

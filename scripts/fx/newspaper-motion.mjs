@@ -7,7 +7,7 @@
    - migawka: smugi = kopie strony wstępnie rozmyte (raz, przy budowie), opóźnione o stały ułamek czasu → łuk smugi rośnie
      z prędkością kątową jak przy migawce 180°;
    - przeostrzenie (rack focus): nowa mapa wyłania się nieostra i „wskakuje” w ostrość, gdy gazeta odlatuje (backdrop-filter
-     na jednej warstwie, tylko w czasie odlotu; pomijane w trybie lite i bez wsparcia przeglądarki);
+     o stałym promieniu na dwóch warstwach, przenikanych, tylko w czasie odlotu; pomijane w trybie lite i bez wsparcia przeglądarki);
    - taśma: ziarno (płótno z szumem przesuwane skokowo 24 razy na sekundę — sam transform), winieta obiektywu, a w wyglądzie
      klasycznym lekkie migotanie projektora; wszystko gaśnie razem ze starą sceną, nowa mapa zostaje czysta;
    - kamera z ręki: przy czekaniu na wspólny start bardzo wolny najazd z oddechem (dryf ułamka procenta), przy odlocie stara
@@ -82,21 +82,14 @@ export function lightState(p, { restW, restH, gloss = 0.7, k = 1 }) {
 }
 
 /**
- * Warstwy światła w środku strony: przyciemnienie i plama połysku, przycięte maską z kanału alfa strony (zagięty róg
- * i każdy inny kształt papieru, jaki narysuje malarz strony). Maska: mała kopia alfy (≤ 160 px) jako obraz.
+ * Warstwy światła w środku strony: przyciemnienie i plama połysku, przycięte do kształtu papieru — prostokąt strony bez
+ * zagiętego rogu (prawy dolny, bok `cut`·szerokość; ten sam kształt, który wycina paperFinish w newspaper.mjs). Geometria
+ * (clip-path), nie maska z obrazu: bez kodowania PNG przy budowie i bez tekstury maski na kompozytorze.
  */
-function lightLayers(page, { restW, restH, modern }) {
+function lightLayers({ restW, restH, modern, cut }) {
   const wrap = document.createElement("div");
-  wrap.style.cssText = `${ABS}overflow:hidden;`;
-  try {
-    const mw = Math.min(160, page.width), mh = Math.max(1, Math.round((page.height * mw) / page.width));
-    const m = mk(mw, mh);
-    m.getContext("2d").drawImage(page, 0, 0, mw, mh);
-    const url = m.toDataURL("image/png");
-    wrap.style.maskImage = wrap.style.webkitMaskImage = `url("${url}")`;
-    wrap.style.maskSize = wrap.style.webkitMaskSize = "100% 100%";
-    wrap.style.maskRepeat = wrap.style.webkitMaskRepeat = "no-repeat";
-  } catch { /* bez maski: światło w prostokącie strony (overflow) */ }
+  const d = (cut * restW).toFixed(2);
+  wrap.style.cssText = `${ABS}overflow:hidden;clip-path:polygon(0 0, 100% 0, 100% calc(100% - ${d}px), calc(100% - ${d}px) 100%, 0 100%);`;
   const shade = document.createElement("div");
   shade.style.cssText = `${ABS}background:${modern ? "#0b0d12" : "#120c06"};opacity:0;will-change:opacity;`;
   const size = Math.max(restW, restH) * 1.15;
@@ -131,9 +124,9 @@ function grainCanvas(VW, VH, r, strength) {
  * Cały zestaw filmowy jednej gazety. Zwraca elementy (klucze do warstw animacji: film, focus, sheen, shade), smugi i
  * funkcje stanu dla faz press / spin oraz pętle (ziarno, migotanie) i kamerę z ręki dla czekania.
  */
-export function cinema({ page, restW, restH, VW, VH, modern = false, lite = false, seed = 1 }) {
+export function cinema({ page, restW, restH, VW, VH, modern = false, lite = false, seed = 1, cut = 0.058 }) {
   const r = prng(seed);
-  const light = lightLayers(page, { restW, restH, modern });
+  const light = lightLayers({ restW, restH, modern, cut });
   const gloss = modern ? 0.55 : 0.7;
 
   const film = document.createElement("div");
@@ -149,10 +142,19 @@ export function cinema({ page, restW, restH, VW, VH, modern = false, lite = fals
     film.append(flick);
   }
 
-  // przeostrzenie nowej mapy: filtr tła tylko tam, gdzie przeglądarka go ma (i nie w lite)
-  let focus = null;
-  try { if (!lite && globalThis.CSS?.supports?.("backdrop-filter", "blur(2px)")) { focus = document.createElement("div"); focus.style.cssText = `${ABS}`; } } catch { /* */ }
+  // przeostrzenie nowej mapy: filtr tła tylko tam, gdzie przeglądarka go ma (i nie w lite). Dwie warstwy o STAŁYM promieniu
+  // (szeroka nad wąską: razem ≈ FOCUS_PX), ostrość wraca przez ich kolejne przenikanie — animowany promień kompilował
+  // w GPU osobny program rozmycia prawie na każdą klatkę (zacięcia odlotu ~100 ms), stały promień = dwa programy na całość.
+  // Do startu odlotu obie mają krycie 0 (bez kosztu).
   const FOCUS_PX = Math.max(5, Math.min(14, Math.min(VW, VH) * 0.011));
+  const FOCUS_LO = Math.max(1.5, FOCUS_PX * 0.36), FOCUS_HI = Math.sqrt(FOCUS_PX ** 2 - FOCUS_LO ** 2);
+  let focus = null, focusLo = null;
+  try {
+    if (!lite && globalThis.CSS?.supports?.("backdrop-filter", "blur(2px)")) {
+      const f = (px) => { const el = document.createElement("div"); el.style.cssText = `${ABS}opacity:0;backdrop-filter:blur(${px.toFixed(2)}px);-webkit-backdrop-filter:blur(${px.toFixed(2)}px);`; return el; };
+      focus = f(FOCUS_HI); focusLo = f(FOCUS_LO);
+    }
+  } catch { /* */ }
 
   const ghosts = lite ? [] : shutterGhosts(page);
   const aspect = Math.max(VW / VH, VH / VW);
@@ -171,9 +173,9 @@ export function cinema({ page, restW, restH, VW, VH, modern = false, lite = fals
       backdrop: { transform: `scale(${s.toFixed(4)}) rotate(${rot.toFixed(3)}deg)` },
       ...lightState(p, { restW, restH, gloss, k: 1 - smooth(0.82, 0.97, t) }),
     };
-    // promień nie schodzi poniżej 1,5 px (małe promienie = inna ścieżka rozmycia w Chromium, skok klatki przy przełączeniu);
-    // resztę nieostrości zdejmuje przenikanie warstwy
-    if (focus) f.focus = { backdropFilter: `blur(${(1.5 + (FOCUS_PX - 1.5) * (1 - smooth(0.3, 0.8, t))).toFixed(2)}px)`, opacity: 1 - smooth(0.72, 0.9, t) };
+    // pełna nieostrość do 0,3, szeroka warstwa schodzi do ~0,62 (zostaje wąska ≈ 0,36·FOCUS_PX), wąska gaśnie do 0,9 —
+    // przebieg jak dawny promień FOCUS_PX → 1,5 px (0,3…0,8) z wygaszeniem 0,72…0,9
+    if (focus) { f.focus = { opacity: +(1 - smooth(0.3, 0.62, t)).toFixed(4) }; f.focusLo = { opacity: +(1 - smooth(0.6, 0.9, t)).toFixed(4) }; }
     return f;
   };
 
@@ -214,9 +216,9 @@ export function cinema({ page, restW, restH, VW, VH, modern = false, lite = fals
   /** Wepnij warstwy: światło do strony (nad czystym zdjęciem), nieostrość pod tłem starej sceny, taśma na wierzch. */
   const mount = (root, sheet, backdrop) => {
     sheet.append(light.wrap);
-    if (focus) root.insertBefore(focus, backdrop.isConnected ? backdrop : root.firstChild);
+    if (focus) { const ref = backdrop.isConnected ? backdrop : root.firstChild; root.insertBefore(focusLo, ref); root.insertBefore(focus, ref); }
     root.append(film);
   };
 
-  return { els: { film, focus, sheen: light.sheen, shade: light.shade }, ghosts, press, spin, loops, handheld, mount };
+  return { els: { film, focus, focusLo, sheen: light.sheen, shade: light.shade }, ghosts, press, spin, loops, handheld, mount };
 }

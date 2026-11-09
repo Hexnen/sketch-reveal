@@ -106,7 +106,8 @@ export function bindTickerItems(root) {
   const labelOf = (li) => li.querySelector(".sr-item-label");
 
   /** Pole tekstu rośnie z treścią (zawija się jak akapit, zamiast uciekać w bok jednolinijkowego pola). */
-  const grow = (ta) => { ta.style.height = "auto"; ta.style.height = `${ta.scrollHeight}px`; };
+  // niewidoczne pole (okno w trakcie otwierania, ukryta sekcja) ma scrollHeight 0 — nie zapisuj 0 px; dopasuj po pokazaniu
+  const grow = (ta) => { if (!ta?.getClientRects().length) return; ta.style.height = "auto"; ta.style.height = `${ta.scrollHeight}px`; };
   const caretTo = (el, pos) => { el.focus(); const p = pos === "end" ? el.value.length : pos; try { el.setSelectionRange(p, p); } catch { /* */ } };
 
   const refresh = () => {
@@ -374,6 +375,15 @@ export function bindTickerItems(root) {
   for (const li of rows()) grow(textOf(li));
   // pole tekstu jest jeszcze niewidoczne (okno w trakcie otwierania) — dopasuj wysokości po pierwszej klatce
   requestAnimationFrame(() => { for (const li of rows()) grow(textOf(li)); });
+  let seenW = 0;
+  const ro = new ResizeObserver(([e]) => {
+    const w = Math.round(e.contentRect.width);
+    if (!w || w === seenW) return; // pokazanie albo zmiana szerokości okna (zawijanie) — nie wzrost wysokości po grow
+    seenW = w;
+    for (const li of rows()) grow(textOf(li));
+  });
+  ro.observe(list);
+  ctl.signal.addEventListener("abort", () => ro.disconnect());
   refresh();
   return () => ctl.abort();
 }
