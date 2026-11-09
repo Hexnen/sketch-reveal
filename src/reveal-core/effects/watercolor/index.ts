@@ -19,6 +19,7 @@ import { PARAM_SPECS, QUALITIES, WATERCOLOR_DEFAULTS, clamp, imageSize, num, sch
 import { createPrep } from "./prep";
 import { WC_SEED_FRAG, seedLayout } from "./seeds";
 import { WC_FRAG } from "./shaders";
+import { uploadSource } from "../../imageTwin";
 
 export { WATERCOLOR_DEFAULTS, schedule } from "./params";
 
@@ -138,7 +139,7 @@ function createWatercolor(canvas: HTMLCanvasElement, opts: WatercolorOptions = {
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, uploadSource(img));
     if (mip) gl.generateMipmap(gl.TEXTURE_2D);
   }
 

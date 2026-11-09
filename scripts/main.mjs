@@ -1,15 +1,20 @@
-import { MODULE_ID } from "./config.mjs";
-import { RevealManager, createPresetMacro, showPresetToAll } from "./apps.mjs";
+import { MODULE_ID, sanitizeConfig } from "./config.mjs";
 import {
   armTransition, cancelTransition, noteSceneActivation, preloadImages, registerSocket, registerSplashState, runTransition,
   runTransitionBarrier, syncIdForScene, transitionSyncId,
 } from "./play.mjs";
-import { onRenderSceneConfig } from "./scene-tab.mjs";
 import { onAirPresetId, onPresetsChanged, previewTicker, registerTickerState, restoreTicker, startTicker, stopTicker, tickerDebug, toggleTicker } from "./ticker-play.mjs";
 import { attachNewspaper, cancelNewspaper, newspaperDebug, onTearDownNewspaper, previewNewspaper, resolveNewspaperFor, runNewspaper, warmNewspaperFont } from "./newspaper-play.mjs";
 import { registerAiTypes } from "./ai-image.mjs";
 import { registerPerfSettings } from "./store.mjs";
-import { getPreset, registerStore, resolveScene } from "./store.mjs";
+import { getPreset, listPresets, registerStore, resolveNewspaper, resolveScene } from "./store.mjs";
+import { warmShaders } from "./fx/shader-warm.mjs";
+
+/* Okna GM-a (menedżer, edytor, eksport, formularze, zakładka sceny) ładowane dopiero, gdy są potrzebne — gracze ich nigdy
+   nie otwierają, więc nie pobierają ich przy każdym wejściu do świata (dev/perf-audit.md F8). GM dostaje je w tle po `ready`. */
+const apps = () => import("./apps.mjs");
+let sceneTab = null, sceneTabMod = null;
+const loadSceneTab = () => (sceneTab ??= import("./scene-tab.mjs").then((m) => (sceneTabMod = m)));
 
 /** Które sceny mają przejście i kiedy: tylko gdy rozstrzygnięcie sceny jest ważne (preset, obrazy). */
 function resolveFor(scene, trigger) {
@@ -46,20 +51,34 @@ Hooks.once("ready", () => {
   registerSocket();
   const mod = game.modules.get(MODULE_ID);
   mod.api = {
-    openManager: () => RevealManager.open(),
+    openManager: () => apps().then((m) => m.RevealManager.open()),
     // pasek wiadomości: „pokaż wszystkim” działa jak przełącznik (na antenie ↔ zdjęty)
-    showToAll: (presetId) => (getPreset(presetId)?.kind === "ticker" ? toggleTicker(presetId) : showPresetToAll(presetId)),
+    showToAll: (presetId) => (getPreset(presetId)?.kind === "ticker" ? toggleTicker(presetId) : apps().then((m) => m.showPresetToAll(presetId))),
     ticker: { start: startTicker, stop: stopTicker, toggle: toggleTicker, onAir: onAirPresetId, preview: previewTicker, debug: tickerDebug },
     // gazeta: podgląd na bieżącym widoku (preset id albo obiekt konfiguracji; bez argumentu — domyślna), diagnostyka
     newspaper: { preview: previewNewspaper, debug: newspaperDebug },
   };
-  warmNewspaperFont();
+  // rozgrzewka gazety (fonty + pierwsze malowanie strony) tylko tam, gdzie gazeta może zagrać: GM (podgląd, edytor) albo
+  // świat ma scenę z gazetą; scena, która dostanie gazetę później, rozgrzewa ją w updateScene
+  if (game.user.isGM || game.scenes.some((s) => resolveNewspaper(s))) warmNewspaperFont();
+  if (game.user.isGM) {
+    const later = () => { apps().catch(() => {}); loadSceneTab().catch(() => {}); };
+    if (globalThis.requestIdleCallback) requestIdleCallback(later, { timeout: 5000 }); else setTimeout(later, 1000);
+  }
   Hooks.on("sketchReveal.presets", onPresetsChanged);
   restoreTicker(); // pasek, który leci, widzą też klienci, którzy weszli później / przeładowali stronę
   // AI Image Gen (opcjonalnie): nasze typy obrazów trafiają do jego okna konfiguracji; kolejność startu modułów jest dowolna
   registerAiTypes();
   Hooks.on("aiImageGen.ready", (api) => { if (game.user.isGM) registerAiTypes(api); });
   if (game.settings.get(MODULE_ID, "preload")) preloadScenes();
+  // F4: programy WebGL efektów używanych w presetach/scenach kompilowane w tle (pierwszy reveal bez ~1 s zamrożenia)
+  setTimeout(() => {
+    try {
+      const cfgs = listPresets().filter((p) => p.config && p.kind !== "ticker" && p.kind !== "newspaper").map((p) => sanitizeConfig(p.config));
+      for (const scene of game.scenes) { const r = resolveScene(scene); if (r) cfgs.push(r.config); }
+      warmShaders(cfgs.map((c) => c.effectId), { glow: cfgs.some((c) => c.glow?.enabled) }).catch(() => {});
+    } catch (e) { console.warn(`${MODULE_ID} | rozgrzewka shaderów`, e); }
+  }, 3000);
 });
 
 /** Rozgrzej cache obrazami scen z włączonym reveal (aktywna + przeglądana), żeby start był natychmiastowy. */
@@ -100,6 +119,7 @@ Hooks.on("updateScene", (scene, changes, options, userId) => {
       runTransitionBarrier(scene.id, transitionSyncId(scene.id)).catch((e) => console.error(`${MODULE_ID} | wspólny start przejścia`, e));
     }
   }
+  if ((MODULE_ID in (changes.flags ?? {}) || changes.active === true) && resolveNewspaper(scene)) warmNewspaperFont(); // jednorazowe
   if (!game.settings.get(MODULE_ID, "preload")) return;
   if (!(MODULE_ID in (changes.flags ?? {})) && changes.active !== true) return;
   const r = resolveScene(scene);
@@ -117,15 +137,19 @@ Hooks.on("getSceneControlButtons", (controls) => {
     name: MODULE_ID, order: 8.5, title: "SKETCHREVEAL.Manager.Button", icon: "fa-solid fa-paintbrush", visible: true, activeTool: "manager",
     onChange: (event, active) => {
       if (!active) return;
-      RevealManager.open();
+      apps().then((m) => m.RevealManager.open());
       // wróć do poprzedniej warstwy (zapamiętanej, a gdy brak — pierwszej innej); odroczone, by nie wchodzić w trwającą aktywację
       const back = prevControl && ui.controls.controls[prevControl] ? prevControl : Object.keys(ui.controls.controls).find((k) => k !== MODULE_ID);
       if (back) setTimeout(() => ui.controls.activate({ control: back }), 0);
     },
-    tools: { manager: { name: "manager", order: 1, title: "SKETCHREVEAL.Manager.Title", icon: "fa-solid fa-paintbrush", button: true, onChange: () => RevealManager.open() } },
+    tools: { manager: { name: "manager", order: 1, title: "SKETCHREVEAL.Manager.Title", icon: "fa-solid fa-paintbrush", button: true, onChange: () => apps().then((m) => m.RevealManager.open()) } },
   };
 });
-Hooks.on("renderSceneConfig", onRenderSceneConfig);
+// zakładka sceny: moduł zwykle już załadowany w tle po `ready` (GM) — wtedy wstawienie jest synchroniczne jak dotąd
+Hooks.on("renderSceneConfig", (...args) => {
+  if (sceneTabMod) return sceneTabMod.onRenderSceneConfig(...args);
+  loadSceneTab().then((m) => m.onRenderSceneConfig(...args)).catch((e) => console.error(`${MODULE_ID} | zakładka sceny`, e));
+});
 
 
 /* ---- przeciągnięcie obrazka presetu z menedżera na pasek makr → makro „pokaż wszystkim” */
@@ -135,7 +159,7 @@ Hooks.on("hotbarDrop", (bar, data, slot) => {
   if (!game.user.isGM) return false; // gracze nie dostają powiadomień modułu
   // zablokowany pasek nie przyjmie przypisania — makro i tak powstaje (katalog makr), a GM dostaje jasny komunikat
   const locked = bar.locked;
-  createPresetMacro(data.presetId, locked ? null : slot)
+  apps().then((m) => m.createPresetMacro(data.presetId, locked ? null : slot))
     .then((macro) => { if (macro && locked) ui.notifications.warn(T("Macro.BarLocked", { name: foundry.utils.escapeHTML(macro.name) })); })
     .catch((e) => { console.error(`${MODULE_ID} | makro z presetu`, e); ui.notifications.error(T("Macro.Failed", { error: foundry.utils.escapeHTML(String(e?.message ?? e)) })); });
   return false; // własny typ — resztą (dokument) nie ma się zajmować pasek

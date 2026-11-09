@@ -26,18 +26,40 @@ const local = analysisModule(sk, { tracePaths } as ReturnType<typeof traceModule
 
 class Cancelled extends Error { constructor() { super("cancelled"); } }
 
+/**
+ * F7: tusz (rysunek na płótnie + odczyt pikseli na wątku głównym) zapamiętany per ZAWARTOŚĆ obrazu. Wołający podaje
+ * identyfikator zawartości (np. ten sam obiekt Blob z pamięci pobranych plików = te same bajty), więc powtórka tego samego
+ * szkicu nie czyta pikseli ponownie. Wynik identyczny z policzonym (ta sama funkcja, te same bajty i rozmiar).
+ */
+const contentIds = new WeakMap<object, object>();
+const inkByContent = new WeakMap<object, Map<string, { ink: Uint8Array; key: string }>>();
+export function setImageContentId(src: object, id: object | null): void {
+  if (id) contentIds.set(src, id); else contentIds.delete(src);
+}
+
 async function analyze(src: RevealImageSource, w: number, h: number, isCancelled: () => boolean, onJob: (c: () => void) => void): Promise<Analysis> {
   const t0 = performance.now();
   const sc = Math.min(1, Math.sqrt(MAX_ANALYSIS_PX / (w * h)));
   const aw = Math.max(1, Math.round(w * sc)), ah = Math.max(1, Math.round(h * sc));
-  const c = document.createElement("canvas");
-  c.width = aw; c.height = ah;
-  const g = c.getContext("2d", { willReadFrequently: true });
-  if (!g) throw new Error("Brak kontekstu 2D");
-  g.fillStyle = "#fff"; g.fillRect(0, 0, aw, ah);
-  g.drawImage(src, 0, 0, aw, ah);
-  const ink = inkFromRgba(g.getImageData(0, 0, aw, ah).data, aw * ah);
-  const key = `${ANALYSIS_VERSION}:${aw}x${ah}:${fnv(ink)}:${fnv(ink, 0x9747b28c)}`;
+  const cid = contentIds.get(src as object), ck = `${w}x${h}|${aw}x${ah}`;
+  const known = cid ? inkByContent.get(cid)?.get(ck) : undefined;
+  let ink: Uint8Array, key: string;
+  if (known) { ink = known.ink.slice(); key = known.key; }
+  else {
+    const c = document.createElement("canvas");
+    c.width = aw; c.height = ah;
+    const g = c.getContext("2d", { willReadFrequently: true });
+    if (!g) throw new Error("Brak kontekstu 2D");
+    g.fillStyle = "#fff"; g.fillRect(0, 0, aw, ah);
+    g.drawImage(src, 0, 0, aw, ah);
+    ink = inkFromRgba(g.getImageData(0, 0, aw, ah).data, aw * ah);
+    key = `${ANALYSIS_VERSION}:${aw}x${ah}:${fnv(ink)}:${fnv(ink, 0x9747b28c)}`;
+    if (cid) {
+      let m = inkByContent.get(cid);
+      if (!m) { m = new Map(); inkByContent.set(cid, m); }
+      m.set(ck, { ink: ink.slice(), key });
+    }
+  }
   const hit = await idbGet<{ paths: Path[] }>(key);
   if (isCancelled()) throw new Cancelled();
   if (hit?.paths) return { aw, ah, ink, key, paths: hit.paths, ms: performance.now() - t0, via: "idb" };

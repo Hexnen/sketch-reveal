@@ -18,6 +18,7 @@ import { SP_FIELD_FRAG, SP_KUWAHARA_FRAG } from "./preShaders";
 import { SP_BLIT_FRAG, SP_FRAG } from "./shaders";
 import { createStrokeTable } from "./strokeTable";
 import { createMainDraw } from "./draw";
+import { uploadSource } from "../../imageTwin";
 
 export interface SpeedpaintOptions {
   /** true tylko dla zrzutów odczytywanych później niż w zadaniu render() (harness/testy). */
@@ -123,7 +124,7 @@ export function createSpeedpaint(canvas: HTMLCanvasElement, opts: SpeedpaintOpti
     gl.bindTexture(gl.TEXTURE_2D, t);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, uploadSource(img));
     if (mip) gl.generateMipmap(gl.TEXTURE_2D);
   }
 

@@ -7,6 +7,7 @@
  * Kod workera jest ciągiem (Blob URL) — bez zależności od bundlera (Vite / Foundry).
  */
 import type { CoverageResult, CoverageSampler } from "./backdrop";
+import { uploadSource } from "../imageTwin";
 
 const WORKER = (vs: string, fs: string) => `
 let gl = null, uGrid, uY0, frameTex, refTex, rt = null, next = null, sched = false;
@@ -87,7 +88,7 @@ export function createWorkerSampler(vs: string, fs: string): CoverageSampler | n
       if (refOf !== ref) {
         refOf = ref;
         let rp: Promise<ImageBitmap> | null = null;
-        try { rp = createImageBitmap(ref as ImageBitmapSource); } catch { /* bez referencji wynik byłby błędny */ return false; }
+        try { rp = createImageBitmap(uploadSource(ref) as ImageBitmapSource); } catch { /* bez referencji wynik byłby błędny */ return false; }
         chain = chain.then(() => rp!).then((b) => { if (dead) b.close(); else wk.postMessage({ t: "ref", bmp: b }, [b]); });
       }
       pending++;

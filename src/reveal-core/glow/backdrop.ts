@@ -19,6 +19,7 @@
  */
 import { VS } from "./shaders";
 import { createWorkerSampler } from "./backdropWorker";
+import { uploadSource } from "../imageTwin";
 
 export const FS_COVER = `#version 300 es
 precision highp float;
@@ -103,7 +104,7 @@ function createThreadSampler(): CoverageSampler | null {
     request(frame, ref, cw, ch, tag) {
       if (dead || gl.isContextLost()) return false;
       try {
-        if (refOf !== ref) { gl.bindTexture(gl.TEXTURE_2D, refTex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, ref); refOf = ref; }
+        if (refOf !== ref) { gl.bindTexture(gl.TEXTURE_2D, refTex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, uploadSource(ref)); refOf = ref; }
         gl.bindTexture(gl.TEXTURE_2D, frameTex);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, frame);
       } catch { return false; } // np. płótno „tainted” → droga zapasowa

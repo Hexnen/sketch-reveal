@@ -4,13 +4,20 @@
    Dwa kroki: "prepare" (każdy klient ładuje obrazy i buduje efekt za zasłoną) → "ready" → GM czeka na wszystkich
    aktywnych (albo na limit czasu) → "go" (wszyscy startują razem). */
 import { MODULE_ID, sanitizeConfig } from "./config.mjs";
-import { RevealPlayer } from "./player.mjs";
+import { RevealPlayer, fetchImageBlob } from "./player.mjs";
 import { clientPerf, getPreset, presetPayload } from "./store.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SOCKET = `module.${MODULE_ID}`;
 const READY_TIMEOUT_MS = 90000; // zimna wektoryzacja szkicu (faza rysowania) potrafi trwać dziesiątki sekund; potem cache w IndexedDB
 const CLIENT_WAIT_MS = READY_TIMEOUT_MS + 20000; // klient czekający na „go” dłużej niż to zamyka splash sam (GM zniknął)
+// F10: klient, który od wysłania „prepare” nie odezwał się WCALE (ani fazą, ani gotowością), nie blokuje startu dłużej
+// niż SILENT_DROP_MS (brak modułu, martwe gniazdo, sesja-widmo: żywy klient wysyła fazę „start” w milisekundach).
+// Klient, którego ostatni raport mówi „karta ukryta”, przestaje być oczekiwany HIDDEN_GRACE_MS po tym, jak wszyscy
+// pozostali są gotowi (ukryta karta może nie dokończyć przygotowania, dopóki ktoś do niej nie wróci). Obaj dostają „go”
+// i startują sami, gdy skończą (późny start jak dotąd). Klient powolny, ale raportujący i widoczny — czekamy do limitu.
+const SILENT_DROP_MS = 8000;
+const HIDDEN_GRACE_MS = 3000;
 const START_LEAD_MS = 500; // „go” niesie czas startu = teraz + 500 ms (zegar GM-a) — tyle ma dojść do wszystkich klientów
 /** Czas epokowy w ms z wysoką rozdzielczością (monotoniczny; różnice między klientami wyznacza syncClock). */
 const epoch = () => performance.timeOrigin + performance.now();
@@ -30,20 +37,17 @@ function closeSplash() { currentSplash?.close(); }
 export function closeCurrent() { currentSplash?.close(); currentTransition?.close(); cancelTransition(); Hooks.callAll("sketchReveal.closeAll"); }
 
 /* ---------------------------------------------------------------- preload */
-const warmed = new Set();
 const sameOrigin = (u) => { try { return typeof u === "string" && new URL(u, location.href).origin === location.origin; } catch { return false; } };
-/** Rozgrzej cache przeglądarki (pobierz + zdekoduj) — ciche, bez nakładki. */
+/**
+ * Rozgrzej obrazy — ciche, bez nakładki. Pobiera plik do pamięci odtwarzacza (fetchImageBlob, ten sam tryb CORS co
+ * przygotowanie), więc start nie pobiera go drugi raz (Foundry: `no-store`); dekodowanie robi przygotowanie poza wątkiem
+ * głównym (dev/perf-audit.md F6). Pamięć wygasa sama (10 min / limit rozmiaru) — ponowna rozgrzewka pobiera świeży plik.
+ */
 export async function preloadImages(urls) {
   // wiadomość z gniazda nie jest uwierzytelniona: tylko tablica stringów, adresy z tego samego źródła, najwyżej 8
   if (!Array.isArray(urls)) return;
-  await Promise.all(urls.slice(0, 8).filter((u) => sameOrigin(u) && !warmed.has(u)).map(async (u) => {
-    try {
-      const img = new Image();
-      img.decoding = "async";
-      img.src = u;
-      await img.decode();
-      warmed.add(u);
-    } catch (e) { console.warn(`${MODULE_ID} | preload nieudany`, u, e); }
+  await Promise.all(urls.slice(0, 8).filter((u) => sameOrigin(u)).map(async (u) => {
+    try { await fetchImageBlob(u); } catch (e) { console.warn(`${MODULE_ID} | preload nieudany`, u, e); }
   }));
 }
 
@@ -200,6 +204,7 @@ function onReady({ id, userId, ok }) {
   const r = runs.get(id);
   if (!r || typeof userId !== "string" || !r.expected.has(userId)) return;
   (ok ? r.ready : r.failed).add(userId);
+  if (r.heard && !r.heard.has(userId)) r.heard.set(userId, { at: performance.now(), visible: undefined });
   r.wake();
 }
 
@@ -246,21 +251,41 @@ export async function showSplashToAll(presetId) {
   if (!getPreset(presetId)) return ui.notifications.warn(game.i18n.localize("SKETCHREVEAL.Macro.Missing"));
   const id = foundry.utils.randomID();
   const expected = new Set(game.users.filter((u) => u.active).map((u) => u.id));
-  const run = { ready: new Set(), failed: new Set(), expected, wake: () => {} };
+  const run = { ready: new Set(), failed: new Set(), expected, wake: () => {}, heard: new Map() };
   runs.set(id, run);
   // klient, który wypadł (zamknął kartę) w trakcie, przestaje być oczekiwany
   const waiting = () => [...expected].filter((u) => game.users.get(u)?.active && !run.ready.has(u) && !run.failed.has(u));
-  const allDone = new Promise((res) => { run.wake = () => { if (!waiting().length) res(true); }; });
+  // F10: kogo czekamy naprawdę — bez milczących (po SILENT_DROP_MS) i ukrytych (HIDDEN_GRACE_MS po gotowości reszty)
+  let t0 = 0, othersDoneAt = 0;
+  const blocking = () => {
+    const w = waiting();
+    if (!t0) return w;
+    const now = performance.now();
+    const silent = (u) => !run.heard.has(u) && now - t0 >= SILENT_DROP_MS;
+    const hidden = (u) => run.heard.get(u)?.visible === "hidden";
+    const rest = w.filter((u) => !silent(u) && !hidden(u));
+    if (rest.length) { othersDoneAt = 0; return w.filter((u) => !silent(u)); }
+    othersDoneAt ||= now;
+    return now - othersDoneAt >= HIDDEN_GRACE_MS ? [] : w.filter((u) => !silent(u));
+  };
+  const allDone = new Promise((res) => { run.wake = () => { if (!blocking().length) res(true); }; });
+  const heardHook = Hooks.on("sketchReveal.phase", (m) => {
+    if (m?.id !== id || typeof m.userId !== "string" || !expected.has(m.userId)) return;
+    run.heard.set(m.userId, { at: performance.now(), visible: m.visible });
+  });
   let hud, ticker;
   const state = (phase, extra = {}) => game.settings.set(MODULE_ID, "splashState", { id, presetId, phase, at: Date.now(), ...extra });
   try {
     await state("prepare");
+    t0 = performance.now();
     hud = createSyncHud(expected, run);
     ticker = setInterval(() => run.wake(), 500);
     const done = await Promise.race([allDone, sleep(READY_TIMEOUT_MS).then(() => false)]);
-    if (!done) {
-      const names = waiting().map((u) => foundry.utils.escapeHTML(game.users.get(u)?.name ?? u)).join(", ");
+    const late = waiting(); // done = nikt nie blokuje; ci, którzy jeszcze nie są gotowi, startują sami po „go”
+    if (!done || late.length) {
+      const names = late.map((u) => foundry.utils.escapeHTML(game.users.get(u)?.name ?? u)).join(", ");
       ui.notifications.warn(game.i18n.format("SKETCHREVEAL.Sync.Timeout", { names }));
+      console.info(`${MODULE_ID} | start bez: ${late.map((u) => `${game.users.get(u)?.name ?? u} (${run.heard.has(u) ? run.heard.get(u).visible : "silent"})`).join(", ")} po ${Math.round(performance.now() - t0)} ms`);
     }
     const failed = [...run.failed].map((u) => game.users.get(u)?.name).filter(Boolean).map(foundry.utils.escapeHTML);
     if (failed.length) ui.notifications.warn(game.i18n.format("SKETCHREVEAL.Sync.Failed", { names: failed.join(", ") }));
@@ -270,7 +295,7 @@ export async function showSplashToAll(presetId) {
     try { await state("close"); } catch { /* */ } // nie zostawiaj klientów za zasłoną po wyjątku
     throw e;
   } finally {
-    clearInterval(ticker); hud?.dispose();
+    clearInterval(ticker); hud?.dispose(); Hooks.off("sketchReveal.phase", heardHook);
     // wpis sesji żyje jeszcze przez okno startu: raporty „started”/tsync i własny start inicjatora go potrzebują
     setTimeout(() => runs.delete(id), START_LEAD_MS + 3000);
   }

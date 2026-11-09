@@ -14,6 +14,7 @@ import { DEFAULT_SPREAD, mergeSpread, type SpreadParams } from "./params";
 import { createPrepJob, fieldKeyOf, type PrepJob } from "./prep";
 import { BLIT_FRAG, SPREAD_FRAG, SPREAD_VERT } from "./shader";
 import { spreadTail } from "./tail";
+import { uploadSource } from "../../imageTwin";
 
 const UNIFORMS = [
   "u_sketch", "u_painted", "u_time", "u_texRes", "u_x", "u_soft", "u_brush", "u_lag", "u_lineFade",
@@ -74,7 +75,7 @@ function uploadImage(gl: WebGL2RenderingContext, tex: WebGLTexture, src: TexImag
   gl.bindTexture(gl.TEXTURE_2D, tex);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); // uv (0,0) = lewy górny róg
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, uploadSource(src));
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);

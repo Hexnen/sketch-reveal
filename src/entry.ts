@@ -8,3 +8,6 @@ export {
 } from "./reveal-core/glow";
 export { GLOW_DETECTORS, GLOW_DETECTOR_HINT } from "./reveal-core/glow/analyzeOpts";
 export { applyHints, sanitizeHints, LIGHT_HINT_KINDS } from "./reveal-core/glow";
+// Wydajność (dev/perf-audit.md F2/F7): bliźniak ImageBitmap do uploadu tekstur, identyfikator zawartości szkicu
+export { setUploadTwin } from "./reveal-core/imageTwin";
+export { setImageContentId } from "./reveal-core/sketchIntro/analysisCache";

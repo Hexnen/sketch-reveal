@@ -35,20 +35,107 @@ async function loadImage(src) {
   return img;
 }
 
-/** Obraz > `max` → kopia pomniejszona (blob URL — zwalnia właściciel w `owned`); inaczej ten sam obiekt. */
-async function fitImage(img, owned, max = revealMaxSide()) {
-  const W = img.naturalWidth, H = img.naturalHeight, k = max / Math.max(W, H);
-  if (!(k < 1)) return img;
+const imgW = (s) => s.naturalWidth || s.width;
+const imgH = (s) => s.naturalHeight || s.height;
+
+/* Obrazy (dev/perf-audit.md F2/F3/F6). Źródłem dla wszystkich warstw zostaje <img> jak dawniej (rysunki 2D w analizach
+   i skalowaniu dają z <img> inne piksele niż z ImageBitmap przy dużym pomniejszeniu), ale:
+   - plik jest pobierany raz (fetch → Blob, pamięć niżej) i <img> dekoduje go z blob URL — bez drugiego żądania;
+   - dla obrazów, których tekstura z ImageBitmap jest bajt w bajt ta sama (bitmapSafe), rdzeń dostaje bliźniaka do
+     texImage2D (setUploadTwin): upload 7–8× szybszy, bo Chromium konwertuje <img> przy KAŻDYM texImage2D. */
+const BMP_OPTS = { premultiplyAlpha: "none", colorSpaceConversion: "default", imageOrientation: "from-image" };
+
+/* Pamięć pobranych plików (Blob, nie zdekodowane piksele): rozgrzewka (preloadImages) i powtórki tego samego obrazu nie
+   pobierają go ponownie (Foundry wysyła `Cache-Control: no-store`, więc cache HTTP nie pomaga). Ten sam obiekt Blob =
+   te same bajty, więc służy też za identyfikator zawartości (tusz szkicu liczony raz — F7). */
+const BLOB_TTL_MS = 10 * 60_000, BLOB_MAX_BYTES = 160 * 1024 * 1024;
+const blobCache = new Map(); // absolutny URL → { p: Promise<Blob>, at, size }
+const absUrl = (u) => { try { return new URL(u, location.href).href; } catch { return String(u); } };
+function pruneBlobs() {
+  const now = performance.now();
+  let total = 0;
+  for (const [k, e] of [...blobCache].reverse()) { // od najnowszych
+    if (now - e.at > BLOB_TTL_MS || (total += e.size) > BLOB_MAX_BYTES) blobCache.delete(k);
+  }
+}
+/** Plik obrazu jako Blob (z pamięci, gdy świeży). Te same zasady co <img crossOrigin="anonymous">: CORS, ciasteczka tylko same-origin. */
+export function fetchImageBlob(url) {
+  const key = absUrl(url);
+  const cacheable = /^https?:/i.test(key);
+  if (cacheable) {
+    pruneBlobs();
+    const hit = blobCache.get(key);
+    if (hit) { blobCache.delete(key); blobCache.set(key, hit); return hit.p; }
+  }
+  const e = { at: performance.now(), size: 0, p: null };
+  e.p = fetch(key, { mode: "cors", credentials: "same-origin" })
+    // arrayBuffer → Blob zamiast r.blob(): duże odpowiedzi (> ~10 MB) w r.blob() kończyły się „Failed to fetch” (Edge headless)
+    .then(async (r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return new Blob([await r.arrayBuffer()], { type: r.headers.get("content-type") || "" }); })
+    .then((b) => { e.size = b.size; if (cacheable) pruneBlobs(); return b; }, (err) => { if (blobCache.get(key) === e) blobCache.delete(key); throw err; });
+  if (cacheable) blobCache.set(key, e);
+  return e.p;
+}
+
+/**
+ * Czy tekstura z ImageBitmap tego pliku jest bajt w bajt ta sama co z <img>? Tylko nieprzezroczysty PNG bez zarządzania
+ * kolorem (iCCP/cHRM/gAMA/cICP/tRNS) — zmierzone. JPEG (także bez EXIF i ICC), WebP, PNG z alfą lub profilem, AVIF, GIF,
+ * SVG… — bez bliźniaka (tam ImageBitmap dawał inne piksele: dekoder, premultiplikacja, konwersja koloru).
+ */
+export async function bitmapSafe(blob) {
+  try {
+    const b = new Uint8Array(await blob.slice(0, Math.min(blob.size, 256 * 1024)).arrayBuffer());
+    const u32 = (o) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
+    const tag = (o) => String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
+    if (!(b[0] === 0x89 && tag(1).startsWith("PNG")) || tag(12) !== "IHDR" || b[25] === 4 || b[25] === 6) return false; // PNG bez kanału alfa
+    for (let o = 8; o + 8 <= b.length;) {
+      const n = u32(o), t = tag(o + 4);
+      if (t === "iCCP" || t === "cHRM" || t === "gAMA" || t === "cICP" || t === "tRNS") return false;
+      if (t === "IDAT" || t === "IEND") return true;
+      o += 12 + n;
+    }
+  } catch { /* */ }
+  return false;
+}
+
+/** Obraz odtwarzacza: `src` (<img> dla warstw i śladu szkicu), `up` (bliźniak do uploadu albo null). */
+function picOf(img, up) {
+  if (up && (up.width !== img.naturalWidth || up.height !== img.naturalHeight)) up = null; // na wszelki wypadek
+  if (up) Core.setUploadTwin(img, up);
+  return { src: img, up };
+}
+
+async function loadPic(url, owned) {
+  let blob = null;
+  try { blob = await fetchImageBlob(url); } catch { /* np. CORS — dawna droga zgłosi ten sam błąd */ }
+  if (!blob) return picOf(await loadImage(url), null);
+  const u = owned.url(blob);
+  const safe = await bitmapSafe(blob);
+  const [img, up] = await Promise.all([
+    loadImage(u),
+    safe ? createImageBitmap(blob, BMP_OPTS).then((b) => owned.bmp(b), () => null) : null,
+  ]);
+  Core.setImageContentId(img, blob);
+  return picOf(img, up);
+}
+
+/** Płótno → obraz odtwarzacza dawną drogą (PNG → <img>; źródło rysunków 2D bez zmian); bliźniak z płótna, gdy `twin` (nieprzezroczyste — zmierzone bajt w bajt). */
+async function picFromCanvas(c, owned, twin) {
+  const up = twin ? await createImageBitmap(c, { premultiplyAlpha: "none" }).then((b) => owned.bmp(b), () => null) : null;
+  const img = await canvasToImage(c, owned);
+  c.width = 0; c.height = 0;
+  return picOf(img, up);
+}
+
+/** Obraz > `max` → kopia pomniejszona (wygładzanie „high” jak dawniej); inaczej ten sam obiekt. */
+async function fitPic(pic, owned, max = revealMaxSide()) {
+  const img = pic.src, W = img.naturalWidth, H = img.naturalHeight, k = max / Math.max(W, H);
+  if (!(k < 1)) return pic;
   const c = document.createElement("canvas");
   c.width = Math.max(1, Math.round(W * k)); c.height = Math.max(1, Math.round(H * k));
   const g = c.getContext("2d");
   g.imageSmoothingEnabled = true; g.imageSmoothingQuality = "high";
   g.drawImage(img, 0, 0, c.width, c.height);
-  const blob = await new Promise((r) => c.toBlob(r, "image/png"));
-  if (!blob) return img;
-  const url = URL.createObjectURL(blob);
-  owned.push(url);
-  return loadImage(url);
+  return picFromCanvas(c, owned, !!pic.up);
 }
 
 async function canvasToImage(c, owned) {
@@ -58,13 +145,24 @@ async function canvasToImage(c, owned) {
   return loadImage(url);
 }
 
+/** Biały arkusz (tryb nakładania): ImageBitmap płótna zamiast PNG (F3) — jednolita biel jest ta sama w każdej drodze (zmierzone). */
 async function blankImage(w, h, owned) {
   const c = document.createElement("canvas");
   c.width = w; c.height = h;
   const g = c.getContext("2d");
   g.fillStyle = "#fff"; g.fillRect(0, 0, w, h);
+  try { const b = owned.bmp(await createImageBitmap(c, { premultiplyAlpha: "none" })); c.width = 0; c.height = 0; return b; } catch { /* */ }
   return canvasToImage(c, owned);
 }
+
+/** Zdekodowane piksele zwalniane zaraz po dispose (nie czekają na GC); z zapasem na odroczone zadania warstw. */
+function closeLater(bitmaps) {
+  if (bitmaps.length) setTimeout(() => { for (const b of bitmaps) try { b.close(); } catch { /* */ } }, 2000);
+}
+
+/** Ustąp wątkowi głównemu między krokami budowy warstw (F5): bez rAF — karta w tle nie może wstrzymać przygotowania. */
+const yieldTask = () => (globalThis.scheduler?.yield ? globalThis.scheduler.yield()
+  : new Promise((r) => { const ch = new MessageChannel(); ch.port1.onmessage = () => { ch.port1.close(); r(); }; ch.port2.postMessage(0); }));
 
 /* ---------------------------------------------------------------- odtwarzacz */
 export class RevealPlayer {
@@ -86,7 +184,12 @@ export class RevealPlayer {
     this.perfBase = sanitizePerf(perf ?? DEFAULT_PERF);
     this.perf = this.perfBase;
     this.progress = 0; this.playing = false; this.disposed = false; this._raf = 0; this._over = 0;
-    this._owned = { disposed: false, urls: [], push(u) { if (this.disposed) URL.revokeObjectURL(u); else this.urls.push(u); } };
+    this._owned = {
+      disposed: false, urls: [], bitmaps: [],
+      push(u) { if (this.disposed) URL.revokeObjectURL(u); else this.urls.push(u); },
+      url(blob) { const u = URL.createObjectURL(blob); this.push(u); return u; },
+      bmp(b) { if (this.disposed) closeLater([b]); else this.bitmaps.push(b); return b; },
+    };
     this._gen = 0; this._done = null; this._side = -1; this._lastM = null; this._liveLast = 0; this._loopOn = false;
     this.meter = createFpsMeter();
     this.finished = new Promise((res) => { this._done = res; });
@@ -120,19 +223,20 @@ export class RevealPlayer {
   async prepare() {
     const cfg = this.cfg;
     this._ph("start");
-    const [s0, p0] = await Promise.all([loadImage(this.sketchUrl), loadImage(this.paintedUrl)]);
+    const [s0, p0] = await Promise.all([loadPic(this.sketchUrl, this._owned), loadPic(this.paintedUrl, this._owned)]);
+    this.uploadTwins = [!!s0.up, !!p0.up]; // diagnostyka: czy tekstury idą z ImageBitmap
     this._ph("images-loaded");
     if (this.disposed) return;
-    const [sketch, painted] = await Promise.all([fitImage(s0, this._owned), fitImage(p0, this._owned)]);
+    const [sketch, painted] = await Promise.all([fitPic(s0, this._owned), fitPic(p0, this._owned)]);
     if (this.disposed) return;
-    this.W = painted.naturalWidth; this.H = painted.naturalHeight;
+    this.W = imgW(painted.src); this.H = imgH(painted.src);
     // szkic o innym rozmiarze niż malunek: rdzeń zakłada ten sam rozmiar → przeskaluj szkic na rozmiar malunku
-    if (sketch.naturalWidth === this.W && sketch.naturalHeight === this.H) this.sketch = sketch;
+    if (imgW(sketch.src) === this.W && imgH(sketch.src) === this.H) this.sketch = sketch;
     else {
       const c = document.createElement("canvas");
       c.width = this.W; c.height = this.H;
-      c.getContext("2d").drawImage(sketch, 0, 0, this.W, this.H);
-      this.sketch = await canvasToImage(c, this._owned);
+      c.getContext("2d").drawImage(sketch.src, 0, 0, this.W, this.H);
+      this.sketch = await picFromCanvas(c, this._owned, !!sketch.up);
       if (this.disposed) return;
     }
     this.painted = painted;
@@ -193,19 +297,21 @@ export class RevealPlayer {
     if (!side) return { sketch: this.sketch, painted: this.painted, scale: 1 };
     this._scaleCache ??= new Map();
     if (!this._scaleCache.has(side)) {
-      const [sketch, painted] = await Promise.all([fitImage(this.sketch, this._owned, side), fitImage(this.painted, this._owned, side)]);
-      this._scaleCache.set(side, { sketch, painted, scale: painted.naturalWidth / this.painted.naturalWidth });
+      const [sketch, painted] = await Promise.all([fitPic(this.sketch, this._owned, side), fitPic(this.painted, this._owned, side)]);
+      this._scaleCache.set(side, { sketch, painted, scale: imgW(painted.src) / imgW(this.painted.src) });
     }
     return this._scaleCache.get(side);
   }
 
   /* ---- warstwy */
   _teardownLayers() {
+    // najpierw odpiąć płótna od DOM (F1): rozbłysk i nakładka szkicu zwalniają kontekst WebGL po 1 s, gdy płótno jest
+    // odłączone w chwili dispose(), a po 10 s, gdy wisi w DOM — kilka szybkich powtórek dobijało do limitu 16 kontekstów
+    this.cam.replaceChildren();
     for (const k of ["effect", "intro", "glow", "residue"]) {
       try { this[k]?.dispose?.(); } catch { /* */ }
       this[k] = null;
     }
-    this.cam.replaceChildren();
     this.effectCanvas = this.introCanvas = null;
   }
 
@@ -213,8 +319,12 @@ export class RevealPlayer {
   async _buildLayers(side) {
     const gen = ++this._gen; // nowsza przebudowa (auto-jakość) unieważnia starszą: po każdym await `stale()` → wyjście
     const stale = () => this.disposed || gen !== this._gen;
-    const cfg = this.cfg, { sketch, painted, scale } = await this._scaledImages(side);
+    // F5: pierwsza budowa (za zasłoną, nic jeszcze nie gra) ustępuje wątkowi między krokami — bez jednego długiego zadania.
+    // Przebudowa w trakcie odtwarzania (auto-jakość) zostaje jednym zadaniem jak dotąd (żadna klatka bez części warstw).
+    const step = this._built ? async () => {} : yieldTask;
+    const cfg = this.cfg, pics = await this._scaledImages(side), scale = pics.scale;
     if (stale()) return;
+    const sketch = pics.sketch.src, painted = pics.painted.src, pw = imgW(painted), ph = imgH(painted);
     this._teardownLayers();
     this._side = side;
     const sw = (p) => (typeof p.paperScale === "number" ? { ...p, paperScale: p.paperScale * scale } : p); // ziarno papieru w uv jak w oryginale
@@ -224,14 +334,19 @@ export class RevealPlayer {
     // efekt koloru (w trybie nakładania dostaje biały arkusz zamiast szkicu — szkic rysuje nakładka)
     this.effectCanvas = mkCanvas("sr-effect");
     this.cam.append(this.effectCanvas);
-    this.effectCanvas.width = painted.naturalWidth; this.effectCanvas.height = painted.naturalHeight;
+    this.effectCanvas.width = pw; this.effectCanvas.height = ph;
     this.effect = Core.getEffect(cfg.effectId).create(this.effectCanvas);
-    const effSketch = this.overlap ? await blankImage(painted.naturalWidth, painted.naturalHeight, this._owned) : sketch;
+    const effSketch = this.overlap ? await blankImage(pw, ph, this._owned) : sketch;
     if (stale()) return; // warstwy tej przebudowy sprzątnie nowsza (albo dispose)
     this.effect.setImages(effSketch, painted);
     this.effect.setParams(sw(params));
     this._ph("effect-created");
+    // szew nakładki z klatką p=0 efektu: odczyt w tym samym zadaniu co setImages (jak dawniej) — późniejsze przerwy (F5)
+    // nie mogą zmienić klatki, którą czyta (asynchroniczny preprocessing efektu biegnie dalej między zadaniami)
+    const seam = cfg.intro.enabled && this.sec > 0 && !this.overlap ? this._seamPixels(pw, ph) : null;
     this.coverage = createCoverageProvider(() => this.effect, cfg.effectId);
+    await step();
+    if (stale()) return;
 
     // ślad szkicu pod malunkiem
     if (cfg.residue > 0) {
@@ -243,30 +358,27 @@ export class RevealPlayer {
         host: this.cam, images: { sketch, painted }, params: this.glowOpts.params, effectCanvas: this.effectCanvas,
         coverage: this.coverage, hints: this.hints, hintsStrict: this.hintsStrict,
       });
+      await step();
+      if (stale()) return;
     }
     // nakładka rysowania szkicu
     if (cfg.intro.enabled && this.sec > 0) {
       this.introCanvas = mkCanvas("sr-intro");
       this.cam.append(this.introCanvas);
       Object.assign(this.introCanvas.style, oversampleStyle(this.camera, this.aspect) ?? {});
+      let it = null;
       try {
-        const it = Core.createSketchIntro(this.introCanvas);
+        it = Core.createSketchIntro(this.introCanvas);
         const ip = sw({ ...cfg.intro.params, ...cfg.paper, seconds: cfg.intro.seconds });
         if (this.overlap) { ip.paper = false; this.introCanvas.style.mixBlendMode = "multiply"; }
         it.setParams?.(ip);
-        it.setSketch(sketch, painted.naturalWidth, painted.naturalHeight);
+        it.setSketch(sketch, pw, ph);
         this.intro = it;
-        if (!this.overlap) this._seam(painted.naturalWidth, painted.naturalHeight); // szew z klatką p=0 efektu
       } catch (e) {
-        console.warn("sketch-reveal | faza szkicu niedostępna, pomijam", e);
-        this.intro = null; this.introCanvas.remove(); this.introCanvas = null;
-        // bez fazy szkicu przelicz CAŁĄ oś (total, glowStart, kamera); w trybie nakładania efekt dostał biały arkusz — wróć do prawdziwego szkicu
-        const wasOverlap = this.overlap;
-        this._introFailed = true;
-        this._timeline();
-        this.cameraCtl?.set?.({ total: this.total });
-        if (wasOverlap) this.effect.setImages(sketch, painted);
+        try { it?.dispose?.(); } catch { /* */ }
+        this._introFailedWith(e, sketch, painted);
       }
+      if (this.intro && seam) { try { this.intro.setTarget?.(seam, pw, ph); } catch { /* bez szwu nakładka kończy na szkicu */ } }
     }
     this._isolate();
     // gotowość asynchronicznych warstw (efekty z preprocessingiem, wektoryzacja szkicu, analiza świateł)
@@ -276,6 +388,18 @@ export class RevealPlayer {
     if (this.intro?.isReady?.() === false) waits.push(this.intro.whenReady?.().catch(() => {}));
     if (this.glow) waits.push(this.glow.whenReady());
     await Promise.all(waits);
+    if (!stale()) this._built = true;
+  }
+
+  /** Faza szkicu niedostępna: bez niej przelicz CAŁĄ oś (total, glowStart, kamera); w trybie nakładania efekt dostał biały arkusz — wróć do prawdziwego szkicu. */
+  _introFailedWith(e, sketch, painted) {
+    console.warn("sketch-reveal | faza szkicu niedostępna, pomijam", e);
+    this.intro = null; this.introCanvas?.remove(); this.introCanvas = null;
+    const wasOverlap = this.overlap;
+    this._introFailed = true;
+    this._timeline();
+    this.cameraCtl?.set?.({ total: this.total });
+    if (wasOverlap) this.effect.setImages(sketch, painted);
   }
 
   _isolate() {
@@ -283,7 +407,8 @@ export class RevealPlayer {
     this.cam.style.isolation = sceneIsolation(this.glowSec > 0, blend, this.overlap);
   }
 
-  _seam(w, h) {
+  /** Klatka p=0 efektu (RGBA) do szwu z nakładką szkicu; null = pusta/błąd (wtedy nakładka kończy na szkicu). */
+  _seamPixels(w, h) {
     try {
       this.effect.setProgress(0); this.effect.render();
       const c = document.createElement("canvas");
@@ -291,10 +416,9 @@ export class RevealPlayer {
       const g = c.getContext("2d", { willReadFrequently: true });
       g.drawImage(this.effectCanvas, 0, 0);
       const d = g.getImageData(0, 0, w, h).data;
-      let blank = true;
-      for (let i = 0; i < d.length; i += 4) if (d[i] | d[i + 1] | d[i + 2]) { blank = false; break; }
-      if (!blank) this.intro.setTarget?.(d, w, h);
-    } catch { /* bez szwu nakładka kończy na szkicu */ }
+      for (let i = 0; i < d.length; i += 4) if (d[i] | d[i + 1] | d[i + 2]) return d;
+    } catch { /* */ }
+    return null;
   }
 
   /* ---- ustawienia wydajności w trakcie (auto-jakość) */
@@ -416,10 +540,12 @@ export class RevealPlayer {
     this._ro?.disconnect();
     try { this.auto?.dispose(); this.fpsBadge?.dispose(); } catch { /* */ }
     try { this.title?.dispose(); this.cameraCtl?.dispose(); } catch { /* */ }
+    this.frame.remove(); // F1: płótna poza DOM przed dispose() warstw → krótkie zwolnienie kontekstów WebGL
     this._teardownLayers();
     this._owned.disposed = true;
     for (const u of this._owned.urls) URL.revokeObjectURL(u);
-    this.frame.remove();
+    closeLater(this._owned.bitmaps.splice(0));
+    this._scaleCache?.clear();
     this._done?.();
   }
 }

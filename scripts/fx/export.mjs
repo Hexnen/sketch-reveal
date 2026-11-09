@@ -312,7 +312,8 @@ function freeze(src, dst) {
   }
 }
 
-async function titleImage(root, container, frame, W, H) {
+/** `cache` (opcjonalnie, na jeden eksport): ten sam SVG co w poprzedniej klatce → ten sam zdekodowany obraz (F9: bez dekodowania). */
+async function titleImage(root, container, frame, W, H, cache = null) {
   const cw = container.clientWidth, ch = container.clientHeight;
   if (!cw || !ch) return null;
   const cr = container.getBoundingClientRect(), fr = frame.getBoundingClientRect(), rr = root.getBoundingClientRect();
@@ -333,9 +334,11 @@ async function titleImage(root, container, frame, W, H) {
     + `<foreignObject x="0" y="0" width="${cw}" height="${ch}">`
     + `<div xmlns="http://www.w3.org/1999/xhtml" style="position:relative;margin:0;width:${cw}px;height:${ch}px;overflow:hidden">${html}</div>`
     + `</foreignObject></svg>`;
+  if (cache && cache.svg === svg) return cache.img;
   const img = new Image();
   img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   try { await img.decode(); } catch { return null; }
+  if (cache) { cache.svg = svg; cache.img = img; }
   return img;
 }
 
@@ -396,6 +399,7 @@ export async function exportWebm({ player, options = {}, onProgress, signal } = 
     cap.track(sceneCanvases(player.cam));
     // wymuszenie świeżego rysunku każdej warstwy (dirty-check): skok na koniec osi, potem pętla zaczyna od 0
     player.setProgress(1); await tick();
+    const titleCache = { svg: "", img: null };
     for (let i = 0; i < frames; i++) {
       if (signal?.aborted) throw abortErr();
       if (encErr) throw new ExportError(`Błąd kodera: ${String(encErr)}`);
@@ -408,7 +412,7 @@ export async function exportWebm({ player, options = {}, onProgress, signal } = 
       const root = player.container.querySelector("[data-reveal-title]");
       if (root && getComputedStyle(root).visibility !== "hidden") {
         // napis jest dzieckiem ramki obrazu (nie kontenera) — ramka jest i kontenerem, i prostokątem kadrowania
-        const img = await titleImage(root, player.frame, player.frame, W, H);
+        const img = await titleImage(root, player.frame, player.frame, W, H, titleCache);
         if (img) { g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.globalCompositeOperation = "source-over"; g.drawImage(img, 0, 0, W, H); }
       }
       const frame = new VideoFrame(out, { timestamp: Math.round((i * 1e6) / fps), duration: Math.round(1e6 / fps) });

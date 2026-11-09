@@ -9,6 +9,7 @@ import { MAX_LAMPS, TABLE_SIZE } from "./ignite";
 import type { GlowParams } from "./params";
 import { FS_BLIT, FS_BRIGHT, FS_COMPOSITE, FS_DOWN, FS_IDLE, FS_SRCMAP, FS_STREAK, FS_UP, VS } from "./shaders";
 import { nearestCompMap } from "./nearest";
+import { uploadSource } from "../imageTwin";
 
 /** Najwyższe podniesienie Y ciemnego piksela szarym światłem (sRGB 0..1; barwne światło ma do 4× więcej). */
 const DARK_CAP = 22 / 255;
@@ -167,7 +168,7 @@ export function createGlowRenderer(canvas: HTMLCanvasElement, preserveDrawingBuf
       gl.bindTexture(gl.TEXTURE_2D, img);
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
       gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, src);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, uploadSource(src));
     },
     setAnalysis(an) {
       hasAna = !!an;
