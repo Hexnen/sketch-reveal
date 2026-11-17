@@ -6,6 +6,7 @@ import { aiApi, aiBusy, aiGeneratePainted, aiGenerateSketch, aiGuard } from "./a
 import { applyShowIf, configFormHtml, readForm } from "./form.mjs";
 import { broadcastClose, playSplash, preloadForAll, showSplashToAll } from "./play.mjs";
 import { detectLightHints } from "./fx/ai-hints.mjs";
+import { openKeys } from "./keys-app.mjs";
 import { BUILTIN_PRESETS, deletePreset, getPreset, isNewspaper, isTicker, listPresets, presetPayload, sceneBackground, sceneFlags, savePreset } from "./store.mjs";
 import { DEFAULT_TICKER, inkOn, sanitizeTicker } from "./fx/ticker.mjs";
 import { bindTickerItems, readTickerForm, tickerFormHtml } from "./ticker-form.mjs";
@@ -210,7 +211,7 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
   async _aiDetect() {
     this._collect(); // bieżący obraz malowany z pola formularza (nie ten sprzed zmiany)
     const key = game.settings.get(MODULE_ID, "openrouterKey");
-    if (!key?.trim()) return ui.notifications.warn(T("AI.NoKey"));
+    if (!key?.trim()) { ui.notifications.warn(T("AI.NoKey")); openKeys(); return; } // od razu okno klucza (tylko GM)
     if (!this.meta.painted) return ui.notifications.warn(T("AI.NeedPainted"));
     const status = this.element.querySelector('[data-sr="ai-status"]');
     const btn = this.element.querySelector('[data-sr="ai-detect"]');

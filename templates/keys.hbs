@@ -1,0 +1,18 @@
+<div class="sr-keys-part">
+<div class="sr-keys-body">
+  <p class="hint sr-keys-lead"><i class="fa-solid fa-lock" aria-hidden="true"></i> {{localize "SKETCHREVEAL.Keys.Lead"}}</p>
+  {{#each keys}}
+  <div class="form-group">
+    <label for="{{id}}">{{label}}</label>
+    <div class="form-fields">
+      <input type="password" id="{{id}}" name="{{name}}" value="{{value}}" autocomplete="off" spellcheck="false" autocapitalize="off" data-1p-ignore data-lpignore="true" data-bwignore>
+      <button type="button" class="sr-keys-reveal icon fa-solid fa-eye" data-action="reveal" data-target="{{name}}" aria-label="{{../show}}" aria-pressed="false" aria-controls="{{id}}" data-tooltip="{{../show}}"></button>
+    </div>
+    {{#if hint}}<p class="hint">{{hint}}</p>{{/if}}
+  </div>
+  {{/each}}
+</div>
+<footer class="form-footer">
+  <button type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i> {{localize "SKETCHREVEAL.Keys.Save"}}</button>
+</footer>
+</div>

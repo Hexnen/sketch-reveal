@@ -7,6 +7,7 @@ import { onAirPresetId, onPresetsChanged, previewTicker, registerTickerState, re
 import { attachNewspaper, cancelNewspaper, newspaperDebug, onTearDownNewspaper, previewNewspaper, resolveNewspaperFor, runNewspaper, warmNewspaperFont } from "./newspaper-play.mjs";
 import { registerAiTypes } from "./ai-image.mjs";
 import { registerPerfSettings } from "./store.mjs";
+import { openKeys, registerKeysMenu } from "./keys-app.mjs";
 import { getPreset, listPresets, registerStore, resolveNewspaper, resolveScene } from "./store.mjs";
 import { warmShaders } from "./fx/shader-warm.mjs";
 
@@ -40,10 +41,13 @@ Hooks.once("init", () => {
   registerSplashState();
   registerTickerState();
   registerPerfSettings();
+  // config: false — v14 pokazuje graczom ustawienia KLIENTA w „Konfiguruj ustawienia” (`restricted` działa tylko dla świata),
+  // więc klucz edytuje się w oknie tylko dla GM (keys-app.mjs: menu restricted, pole password). Klucz i zakres bez zmian.
   game.settings.register(MODULE_ID, "openrouterKey", {
     name: "SKETCHREVEAL.Settings.Key.Name", hint: "SKETCHREVEAL.Settings.Key.Hint",
-    scope: "client", config: true, restricted: true, type: String, default: "",
+    scope: "client", config: false, restricted: true, type: String, default: "",
   });
+  registerKeysMenu();
   foundry.applications.handlebars.loadTemplates([`modules/${MODULE_ID}/templates/editor.hbs`, `modules/${MODULE_ID}/templates/manager.hbs`]);
 });
 
@@ -52,6 +56,7 @@ Hooks.once("ready", () => {
   const mod = game.modules.get(MODULE_ID);
   mod.api = {
     openManager: () => apps().then((m) => m.RevealManager.open()),
+    openKeys, // okno klucza OpenRouter (tylko GM)
     // pasek wiadomości: „pokaż wszystkim” działa jak przełącznik (na antenie ↔ zdjęty)
     showToAll: (presetId) => (getPreset(presetId)?.kind === "ticker" ? toggleTicker(presetId) : apps().then((m) => m.showPresetToAll(presetId))),
     ticker: { start: startTicker, stop: stopTicker, toggle: toggleTicker, onAir: onAirPresetId, preview: previewTicker, debug: tickerDebug },

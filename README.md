@@ -16,7 +16,7 @@ Splashe i przejścia scen „szkic → obraz malowany” (efekty WebGL z `reveal
 Efekt koloru (spread / speedpaint / strokes / watercolor, z parametrami), faza rysowania szkicu, papier, zoom i kołysanie
 kamery, ślad szkicu pod malunkiem, napis (22 style, 10 zaników, podtytuł), rozbłysk świateł (glow, żywe światło,
 wykrywanie), czas przytrzymania/rozpłynięcia. Podpowiedzi świateł z AI (przycisk w sekcji rozbłysku, klucz OpenRouter
-w ustawieniach modułu, tylko GM) zapisują się w presecie — gracze klucza nie potrzebują.
+w oknie „Klucze API” w ustawieniach modułu, widocznym tylko dla GM) zapisują się w presecie — gracze klucza nie potrzebują.
 
 ## Pasek wiadomości (news bar)
 Trzeci rodzaj presetu: telewizyjny pasek nad mapą (blok kanału + znacznik „na żywo”, belka z tytułem, pasek z listą

@@ -92,7 +92,7 @@ async function callModel(apiKey, dataUrl) {
  * @returns {{hints: object[], model: string, cost: number, tokens: {prompt:number, completion:number}, ms: number, attempts: number}}
  */
 export async function detectLightHints(imageUrl, apiKey) {
-  if (!apiKey?.trim()) throw new Error("Brak klucza OpenRouter (ustawienia modułu).");
+  if (!apiKey?.trim()) throw new Error("Brak klucza OpenRouter (Ustawienia → Sketch Reveal → Klucze API).");
   const enc = encode(await loadImage(imageUrl));
   const aspect = enc.w / enc.h;
   const t0 = Date.now();
