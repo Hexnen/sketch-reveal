@@ -5,7 +5,7 @@
    i modele są tam), tu zostaje tylko dialog, rozmiary i wpisanie ścieżki w preset/scenę. Nic nie jest zapisywane bez wyboru. */
 import { MODULE_ID } from "./config.mjs";
 
-const AI_ID = "ai-image-gen";
+const AI_IDS = ["moinens-ai-gen", "ai-image-gen"]; // nowe id modułu (Moinens AI Gen), stare jako zapas
 export const TYPE_PAINTED = "sketch-reveal.painted";
 export const TYPE_SKETCH = "sketch-reveal.sketch";
 // Te same limity co „Zoptymalizuj obrazy” (optimize.mjs): tekstura w odtwarzaczu ma ≤ 4096 px; szkic: linie → wysoka jakość.
@@ -19,8 +19,7 @@ const esc = (s) => foundry.utils.escapeHTML(String(s ?? ""));
 /** Surowe API ai-image-gen (moduł aktywny, GM, wersja API ≥ 1 i wszystkie funkcje, których używamy) albo null. */
 function rawApi() {
   if (!game.user?.isGM) return null;
-  const m = game.modules.get(AI_ID);
-  const api = m?.active ? m.api : null;
+  const api = AI_IDS.map((id) => game.modules.get(id)).find((m) => m?.active && m.api)?.api ?? null;
   if (!api || !(Number(api.apiVersion) >= 1)) return null;
   return ["generateImage", "estimateGeneration", "registerImageType"].every((f) => typeof api[f] === "function") ? api : null;
 }
@@ -52,7 +51,7 @@ export function registerAiTypes(api = rawApi()) {
     });
     typesRegistered = true;
   } catch (e) {
-    console.warn(`${MODULE_ID} | rejestracja typów w ${AI_ID} nie powiodła się`, e);
+    console.warn(`${MODULE_ID} | rejestracja typów w ${AI_IDS[0]} nie powiodła się`, e);
   }
   return typesRegistered;
 }

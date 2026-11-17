@@ -40,7 +40,7 @@
         "type": "module"
       },
       {
-        "id": "ai-image-gen",
+        "id": "moinens-ai-gen",
         "type": "module"
       }
     ]
