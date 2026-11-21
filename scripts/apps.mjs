@@ -56,7 +56,9 @@ async function makeSquareIcon(presetId, paintedUrl, size = 256) {
     const name = `${presetId}.webp`;
     // optimized: true — to już zakodowany WebP; optymalizator mediów nie ma go kodować drugi raz
     const res = await FP.upload("data", dir, new File([blob], name, { type: "image/webp" }), {}, { notify: false, optimized: true });
-    return res?.path ?? `${dir}/${name}`;
+    // v14 FilePicker.upload nie rzuca przy błędzie: zwraca false/undefined/{} bez `path` — wtedy ikona zapasowa, nie ścieżka do
+    // pliku, którego nie ma (zepsuta ikona makra)
+    return res?.path || null;
   } catch (e) { console.warn(`${MODULE_ID} | ikona makra`, e); return null; }
 }
 
@@ -100,7 +102,7 @@ async function makeTickerIcon(presetId, accent, look = "broadcast", size = 256) 
     try { await FP.createDirectory("data", dir, {}); } catch { /* katalog już istnieje */ }
     const name = `${presetId}.webp`;
     const res = await FP.upload("data", dir, new File([blob], name, { type: "image/webp" }), {}, { notify: false, optimized: true });
-    return res?.path ?? `${dir}/${name}`;
+    return res?.path || null; // błąd uploadu (bez `path`) → ikona zapasowa
   } catch (e) { console.warn(`${MODULE_ID} | ikona makra paska`, e); return null; }
 }
 
