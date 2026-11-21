@@ -46,7 +46,7 @@ const sameOrigin = (u) => { try { return typeof u === "string" && new URL(u, loc
 export async function preloadImages(urls) {
   // wiadomość z gniazda nie jest uwierzytelniona: tylko tablica stringów, adresy z tego samego źródła, najwyżej 8
   if (!Array.isArray(urls)) return;
-  await Promise.all(urls.slice(0, 8).filter((u) => sameOrigin(u)).map(async (u) => {
+  await Promise.all(urls.slice(0, 8).filter((u) => u && sameOrigin(u)).map(async (u) => {
     try { await fetchImageBlob(u); } catch (e) { console.warn(`${MODULE_ID} | preload nieudany`, u, e); }
   }));
 }
