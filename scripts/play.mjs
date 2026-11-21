@@ -377,7 +377,9 @@ export async function runTransition() {
     if (pending === t) pending = null;
   };
   const canSkip = () => game.user.isGM || !!cfg.playerSkip || !game.users.activeGM;
-  const onKey = (e) => { if (e.key !== "Escape" || closed || !canSkip()) return; const t = e.target; if (t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return; e.preventDefault(); e.stopPropagation(); close(); };
+  // !isConnected: przejście anulowane zmianą sceny (cancel() zdjął nakładkę, ale ten przebieg jeszcze czeka na „tgo”) —
+  // niewidoczne przejście nie może połykać Escape rdzenia
+  const onKey = (e) => { if (e.key !== "Escape" || closed || !overlay.isConnected || !canSkip()) return; const t = e.target; if (t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return; e.preventDefault(); e.stopPropagation(); close(); };
   document.addEventListener("keydown", onKey, true);
   overlay.addEventListener("click", () => { if (!canSkip()) return; if (player.playing) player.skip(); else close(); });
   currentTransition = { overlay, player, close };
