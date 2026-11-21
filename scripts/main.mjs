@@ -122,8 +122,10 @@ Hooks.on("canvasTearDown", (cv, options) => { cancelTransition(); onTearDownNews
 Hooks.on("updateScene", (scene, changes, options, userId) => {
   if (changes.active === true) {
     noteSceneActivation(scene.id); // każdy klient: ta scena właśnie została aktywowana
-    // aktywujący GM jest inicjatorem wspólnego startu przejścia (czeka na gotowość klientów i wysyła czas startu)
-    if (userId === game.user.id && game.user.isGM && game.settings.get(MODULE_ID, "transitions") && (resolveFor(scene) || resolveNewspaperFor(scene))) {
+    // aktywujący GM jest inicjatorem wspólnego startu przejścia (czeka na gotowość klientów i wysyła czas startu).
+    // Niezależnie od JEGO ustawienia „transitions” (ustawienie klienta): gracze z włączonymi przejściami czekają na „tgo”,
+    // więc bez bariery siedzieliby za zasłoną do limitu 60 s; sam GM bez przejścia zgłasza gotowość w canvasInit.
+    if (userId === game.user.id && game.user.isGM && (resolveScene(scene) || resolveNewspaper(scene))) {
       runTransitionBarrier(scene.id, transitionSyncId(scene.id)).catch((e) => console.error(`${MODULE_ID} | wspólny start przejścia`, e));
     }
     // v14: hook leci przed Scene._onUpdateOperation → view(); klient, który już ogląda tę scenę (albo nie ma płótna), nie
