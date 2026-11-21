@@ -13,7 +13,7 @@ import { bindTickerItems, readTickerForm, tickerFormHtml } from "./ticker-form.m
 import { onAirPresetId, previewTicker, startTicker, stopTicker, toggleTicker } from "./ticker-play.mjs";
 import { DEFAULT_NEWSPAPER, sanitizeNewspaper } from "./fx/newspaper.mjs";
 import { bindNewspaperForm, newspaperFormHtml, previewNewspaper } from "./newspaper-play.mjs";
-import { EFFECTS } from "../vendor/reveal-core.js";
+import { EFFECTS, GLOW_DETECT_DEFAULTS } from "../vendor/reveal-core.js";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 const T = (k, d) => (d ? game.i18n.format(`SKETCHREVEAL.${k}`, d) : game.i18n.localize(`SKETCHREVEAL.${k}`));
@@ -349,6 +349,9 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
           const eff = EFFECTS.find((e) => e.id === id);
           if (eff) o.effectParams[id] = { ...eff.defaultParams, ...(c.effectParams[id] ?? {}) };
         }
+        // wykrywanie świateł też jest „rzadkie” (sanitizeConfig usuwa klucze równe domyślnym) — bez postaci gęstej powrót
+        // klucza do domyślnej nie trafiłby do diffu, a scena dalej grałaby wartość presetu
+        if (o.glow?.params) o.glow.params.detect = { ...GLOW_DETECT_DEFAULTS, ...(c.glow?.params?.detect ?? {}) };
         return o;
       };
       const diff = foundry.utils.diffObject(dense(this.base), dense(this.cfg));
