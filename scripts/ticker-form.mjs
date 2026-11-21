@@ -96,6 +96,9 @@ const slugOf = (v) => {
  * Zwraca funkcję sprzątającą (zdejmuje nasłuchy z dokumentu przy przeciąganiu).
  */
 export function bindTickerItems(root) {
+  // nasłuch okna i obserwator z poprzedniego renderu zdejmujemy zawsze — także gdy listy już nie ma (rodzaj zmieniony
+  // z paska na inny), inaczej trzymałyby odpięty formularz do końca sesji
+  root._srItemsAbort?.abort(); root._srItemsAbort = null;
   const list = root.querySelector('[data-sr="items"]');
   if (!list) return () => {};
   const set = list.closest(".sr-rundown-set");
@@ -363,8 +366,7 @@ export function bindTickerItems(root) {
   list.addEventListener("pointerup", (ev) => { if (drag && ev.pointerId === drag.id) dragTo(ev.clientY); endDrag(); });
   list.addEventListener("pointercancel", endDrag);
   list.addEventListener("lostpointercapture", endDrag);
-  // okno przeglądarki traci fokus w trakcie przeciągania → sprzątnij; nasłuch z poprzedniego renderu zdejmujemy
-  root._srItemsAbort?.abort();
+  // okno przeglądarki traci fokus w trakcie przeciągania → sprzątnij (nasłuch z poprzedniego renderu zdjęty na początku)
   const ctl = root._srItemsAbort = new AbortController();
   window.addEventListener("blur", endDrag, { signal: ctl.signal });
 

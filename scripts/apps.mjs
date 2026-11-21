@@ -259,6 +259,9 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     this.element.onchange = () => applyShowIf(this.element); // pola warunkowe (showIf) wg bieżących wartości
   }
 
+  // nasłuch okna (blur) i obserwator rozmiaru listy paska trzymałyby zamknięty edytor w pamięci do końca sesji
+  _onClose(options) { super._onClose?.(options); this.element?._srItemsAbort?.abort(); }
+
   static async #onPreview() {
     this._collect();
     if (this.isTicker) return previewTicker(this.ticker);
