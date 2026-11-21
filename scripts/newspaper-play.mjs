@@ -242,7 +242,7 @@ function stage(data, { sceneId = null, preview = false } = {}) {
   let shot;
   const b = uiBounds();
   try { shot = captureView({ shots: data.shots === "multi" ? data.style : null, safe: { left: b.left, right: b.right, bottom: b.bottom, top: 16 } }); }
-  catch (e) { console.warn(`${MODULE_ID} | gazeta: zrzut płótna nieudany`, e); return null; }
+  catch (e) { console.warn(`${MODULE_ID} | gazeta: zrzut płótna nieudany`, e); last = { captureError: String(e?.message ?? e), sceneId, preview }; return null; }
   const { photo, cover, crop, bg, shots } = shot;
   const captureMs = performance.now() - t0;
   const overlay = makeOverlay();
@@ -398,7 +398,8 @@ export async function previewNewspaper(raw = DEFAULT_NEWSPAPER) {
   if (!data) return ui.notifications?.warn(L("Macro.Missing"));
   if (!canvas?.ready || !canvas.scene) return ui.notifications?.warn(L("Newspaper.NoCanvas"));
   const t = stage(sanitizeNewspaper(data), { preview: true });
-  if (!t) return;
+  // zrzut płótna nieudany (np. utracony kontekst WebGL): podgląd wywołuje GM — powiedz mu, zamiast nie robić nic
+  if (!t) return ui.notifications?.error(L("Error.Play", { error: foundry.utils.escapeHTML(last.captureError ?? "") }));
   t.running = true;
   clearTimeout(t.guard);
   t.onKey = (e) => { if (e.key === "Escape" && !t.closed) { e.preventDefault(); e.stopPropagation(); t.close(true); } };
