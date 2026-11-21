@@ -325,7 +325,8 @@ export function registerSocket() {
       // diagnostyka: każdy klient z modułem odpowiada (GM widzi, kto odbiera gniazdo)
       case "ping": game.socket.emit(SOCKET, { action: "pong", userId: game.user.id, visible: document.visibilityState }); break;
       case "pong": Hooks.callAll("sketchReveal.pong", msg); break;
-      case "phase": if (typeof msg.id === "string" && runs.has(msg.id)) Hooks.callAll("sketchReveal.phase", msg); break;
+      // gniazdo nie jest uwierzytelnione: faza/userId nie-string wywaliłyby panel GM-a (phaseLabel → startsWith) co 500 ms
+      case "phase": if (typeof msg.id === "string" && typeof msg.userId === "string" && typeof msg.phase === "string" && runs.has(msg.id)) Hooks.callAll("sketchReveal.phase", msg); break;
     }
   });
 }
