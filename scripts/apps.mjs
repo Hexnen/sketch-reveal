@@ -538,7 +538,13 @@ export class RevealManager extends HandlebarsApplicationMixin(ApplicationV2) {
         const raw = JSON.parse(await file.text());
         if (!raw || typeof raw !== "object" || raw.module !== MODULE_ID) throw new Error(T("Manager.ImportBad"));
         // ścieżki obrazów z obcego pliku: tylko względne (bez schematu i //) — inaczej każdy klient pobierałby cudzy URL (wyciek IP)
-        const local = (u) => (typeof u === "string" && !/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(u.trim()) ? u.trim() : "");
+        // Parser URL traktuje „\” jak „/” i wycina tabulatory/nowe linie („\\host/x.png”, „/\host”, „/<TAB>/host”) — więc
+        // ostatecznie decyduje rozwiązany adres: to samo źródło co Foundry
+        const local = (u) => {
+          const t = typeof u === "string" ? u.trim() : "";
+          if (!t || /^([a-z][a-z0-9+.-]*:|[\\/]{2})/i.test(t)) return "";
+          try { return new URL(t, location.href).origin === location.origin ? t : ""; } catch { return ""; }
+        };
         const sketch = local(raw.sketch), painted = local(raw.painted);
         const p = await savePreset({ name: raw.name, kind: raw.kind, sketch, painted, config: raw.config, hints: raw.hints, hintsStrict: raw.hintsStrict, ticker: raw.ticker, newspaper: raw.newspaper });
         ui.notifications.info(TE("Manager.Imported", { name: p.name }));
