@@ -44,6 +44,8 @@ export async function exportRevealWebm(payload) {
   if (!payload.sketchUrl || !payload.paintedUrl) return ui.notifications.warn(T("Editor.NeedImages"));
   const opts = await askOptions();
   if (!opts) return;
+  // drugi eksport mógł wystartować, gdy to okno opcji było otwarte (dwa okna naraz) — sprawdź jeszcze raz po odpowiedzi
+  if (exporting) return ui.notifications.warn(T("Export.Busy"));
   exporting = true;
 
   // niewidoczny odtwarzacz o rozmiarze obrazu (układ ramki wymaga rozmiaru kontenera)
