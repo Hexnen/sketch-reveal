@@ -133,6 +133,14 @@ export function onRenderSceneConfig(app, html) {
   const tab = tmp.firstElementChild;
   const miscTab = root.querySelector('.tab[data-tab="misc"]');
   if (miscTab) miscTab.after(tab); else (root.querySelector("footer") ?? root).before(tab);
+  // arkusz tylko do odczytu (scena w zablokowanym kompendium): rdzeń wyłącza pola w _onRender, PRZED tym hookiem, więc naszą
+  // zakładkę wyłączamy sami — inaczej reset/edycja rzucałyby przy zapisie, a generacja AI kosztowałaby bez możliwości zapisu.
+  // Podgląd i eksport WebM niczego nie zapisują, zostają.
+  if (app.isEditable === false) {
+    for (const el of tab.querySelectorAll("input, select, textarea, button, file-picker")) {
+      if (el.dataset.sr !== "preview" && el.dataset.sr !== "webm") el.disabled = true;
+    }
+  }
 
   // AI Image Gen (opcjonalnie): wynik wpisuje się w pola formularza sceny (zapisuje je zwykły „Zapisz” arkusza). Pola szukamy
   // w ŻYWYM arkuszu po zakończeniu generacji: przerysowanie sceny w trakcie podmienia zakładkę, a zamknięty arkusz dostaje flagę wprost.
