@@ -251,7 +251,7 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     this.element.querySelector('select[name="effectId"]')?.addEventListener("change", () => { this._collect(); this.render(); });
     // zmiana rodzaju (splash/przejście ↔ pasek wiadomości) przebudowuje formularz
     this.element.querySelector('select[name="meta.kind"]')?.addEventListener("change", () => { this._collect(); this.render(); });
-    bindTickerItems(this.element);
+    this._srItemsCleanup = bindTickerItems(this.element); // przy zamknięciu this.element jest już null — trzymamy sprzątanie
     bindNewspaperForm(this.element);
     this.element.querySelector('[data-sr="ai-detect"]')?.addEventListener("click", () => this._aiDetect());
     this.element.querySelector('[data-sr="ai-clear"]')?.addEventListener("click", () => { this._collect(); this.hints = []; this.render(); });
@@ -259,8 +259,9 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     this.element.onchange = () => applyShowIf(this.element); // pola warunkowe (showIf) wg bieżących wartości
   }
 
-  // nasłuch okna (blur) i obserwator rozmiaru listy paska trzymałyby zamknięty edytor w pamięci do końca sesji
-  _onClose(options) { super._onClose?.(options); this.element?._srItemsAbort?.abort(); }
+  // nasłuch okna (blur) i obserwator rozmiaru listy paska trzymałyby zamknięty edytor w pamięci do końca sesji;
+  // w v14 _tearDown zeruje this.element przed _onClose, więc sprzątamy przez funkcję zapamiętaną w _onRender
+  _onClose(options) { super._onClose?.(options); this._srItemsCleanup?.(); this._srItemsCleanup = null; }
 
   static async #onPreview() {
     this._collect();
