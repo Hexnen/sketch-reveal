@@ -173,7 +173,7 @@ export function onRenderSceneConfig(app, html) {
     new RevealEditor({ scene: app.document }).render({ force: true });
   });
   tab.querySelector('[data-sr="reset"]').addEventListener("click", async () => {
-    await app.document.update({ [`flags.${MODULE_ID}.-=override`]: null });
+    await app.document.update({ [`flags.${MODULE_ID}.override`]: new foundry.data.operators.ForcedDeletion() }); // v14: „-=” jest przestarzałe
     app.render();
   });
   tab.querySelector('[data-sr="webm"]').addEventListener("click", () => {

@@ -135,7 +135,8 @@ Hooks.on("updateScene", (scene, changes, options, userId) => {
 // Przycisk menedżera w lewym pasku narzędzi sceny, tuż pod „Journal Notes” (order notes = 8, nasz 8,5). Klik otwiera menedżer
 // i wraca do poprzedniej warstwy (przycisk działa jak „akcja”, nie jak nowa warstwa).
 let prevControl = null;
-Hooks.on("activateSceneControls", (app) => { if (app.control?.name && app.control.name !== MODULE_ID) prevControl = app.control.name; });
+// v14 nie ma hooka „activateSceneControls” — każda aktywacja kończy się renderem, a hook renderu leci po onChange kontrolki
+Hooks.on("renderSceneControls", (app) => { if (app.control?.name && app.control.name !== MODULE_ID) prevControl = app.control.name; });
 Hooks.on("getSceneControlButtons", (controls) => {
   if (!game.user.isGM) return;
   controls[MODULE_ID] = {

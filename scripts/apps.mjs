@@ -349,7 +349,7 @@ export class RevealEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       };
       const diff = foundry.utils.diffObject(dense(this.base), dense(this.cfg));
       const key = `flags.${MODULE_ID}`;
-      await this.scene.update({ [`${key}.-=override`]: null });
+      await this.scene.update({ [`${key}.override`]: new foundry.data.operators.ForcedDeletion() }); // v14: „-=” jest przestarzałe
       if (!foundry.utils.isEmpty(diff)) await this.scene.update({ [`${key}.override`]: diff });
       this.scene.sheet?.render();
       return;
