@@ -382,8 +382,10 @@ export async function runTransition() {
   currentTransition = { overlay, player, close };
   try {
     // po canvasReady straż 45 s już nie działa — własny limit, żeby zawieszone przygotowanie nie zostawiło zasłony na zawsze
-    if (!(await Promise.race([t.ready, sleep(READY_TIMEOUT_MS).then(() => false)]))) { await close(); return; } // błąd/limit → bez efektu, scena żywa
-    if (closed) return;
+    // błąd/limit/pominięcie przed wspólnym startem: zgłoś gotowość, żeby bariera GM-a nie czekała na ten klient do limitu
+    const bail = () => { if (t.syncId) reportTransitionReady(t.syncId); };
+    if (!(await Promise.race([t.ready, sleep(READY_TIMEOUT_MS).then(() => false)]))) { bail(); await close(); return; } // błąd/limit → bez efektu, scena żywa
+    if (closed) { bail(); return; }
     if (t.syncId) await transitionStart(t.syncId, () => closed); // wspólny start (albo samodzielny, gdy brak sygnału)
     if (closed) return;
     overlay.classList.add("sr-ready");

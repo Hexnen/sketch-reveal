@@ -1,7 +1,7 @@
 import { MODULE_ID, sanitizeConfig } from "./config.mjs";
 import {
   armTransition, cancelTransition, noteSceneActivation, preloadImages, registerSocket, registerSplashState, runTransition,
-  runTransitionBarrier, syncIdForScene, transitionSyncId,
+  runTransitionBarrier, syncIdForScene, transitionReadyOnly, transitionSyncId,
 } from "./play.mjs";
 import { onAirPresetId, onPresetsChanged, previewTicker, registerTickerState, restoreTicker, startTicker, stopTicker, tickerDebug, toggleTicker } from "./ticker-play.mjs";
 import { attachNewspaper, cancelNewspaper, newspaperDebug, onTearDownNewspaper, previewNewspaper, resolveNewspaperFor, runNewspaper, warmNewspaperFont } from "./newspaper-play.mjs";
@@ -108,8 +108,11 @@ Hooks.on("canvasInit", () => {
   if (resolveNewspaperFor(scene)) { attachNewspaper(scene, syncIdForScene(scene.id)); return; }
   cancelNewspaper();
   const r = resolveFor(scene);
+  const syncId = syncIdForScene(scene.id);
   // aktywacja sceny widziana przez ten klient → przejście startuje wspólnie z innymi (syncId), inaczej od razu po przygotowaniu
-  if (r) armTransition(r, syncIdForScene(scene.id));
+  if (r) armTransition(r, syncId);
+  // ten klient nie gra przejścia (np. wyłączył je w ustawieniach) — zgłoś gotowość, żeby bariera GM-a nie czekała na niego 60 s
+  else if (syncId) transitionReadyOnly(syncId);
 });
 Hooks.on("canvasReady", () => { runTransition(); runNewspaper(); });
 // v14: canvasTearDown leci, zanim warstwy starej sceny zostaną zburzone, i zna następną scenę — moment na zrzut „gazety”
