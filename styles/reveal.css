@@ -19,11 +19,13 @@
 
 /* Menedżer */
 .sketch-reveal.sr-manager .sr-manager-body { display: flex; flex-direction: column; gap: .5rem; height: 100%; }
-.sketch-reveal .sr-toolbar { display: flex; gap: .5rem; flex: none; }
+/* w zwężonym oknie przyciski przechodzą do kolejnego rzędu (window-content ma overflow: hidden — „Zdejmij z anteny” byłby ucięty) */
+.sketch-reveal .sr-toolbar { display: flex; flex-wrap: wrap; gap: .5rem; flex: none; }
 .sketch-reveal .sr-list { overflow-y: auto; flex: 1; padding-right: .25rem; }
 .sketch-reveal .sr-list h3 { margin: .75rem 0 .35rem; border-bottom: 1px solid var(--color-border-dark-4, #444); }
 .sketch-reveal .sr-row { display: flex; align-items: center; gap: .6rem; padding: .35rem; border-radius: 6px; }
-.sketch-reveal .sr-row:hover { background: rgba(255,255,255,.06); }
+/* podświetlenie z bieżącego koloru tekstu: działa w motywie jasnym i ciemnym (biała mgiełka znikała na jasnym tle) */
+.sketch-reveal .sr-row:hover { background: color-mix(in srgb, currentColor 6%, transparent); }
 .sketch-reveal .sr-thumb { cursor: grab; width: 96px; height: 54px; object-fit: cover; border-radius: 4px; border: 1px solid var(--color-border-dark-4, #444); flex: none; }
 .sketch-reveal .sr-info { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .sketch-reveal .sr-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
