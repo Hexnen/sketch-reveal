@@ -126,6 +126,12 @@ Hooks.on("updateScene", (scene, changes, options, userId) => {
     if (userId === game.user.id && game.user.isGM && game.settings.get(MODULE_ID, "transitions") && (resolveFor(scene) || resolveNewspaperFor(scene))) {
       runTransitionBarrier(scene.id, transitionSyncId(scene.id)).catch((e) => console.error(`${MODULE_ID} | wspólny start przejścia`, e));
     }
+    // v14: hook leci przed Scene._onUpdateOperation → view(); klient, który już ogląda tę scenę (albo nie ma płótna), nie
+    // dostanie canvasInit — zgłoś gotowość od razu, żeby bariera GM-a nie czekała na niego do limitu
+    if (!canvas?.initialized || canvas.scene?.id === scene.id) {
+      const syncId = syncIdForScene(scene.id);
+      if (syncId) transitionReadyOnly(syncId);
+    }
   }
   if ((MODULE_ID in (changes.flags ?? {}) || changes.active === true) && resolveNewspaper(scene)) warmNewspaperFont(); // jednorazowe
   if (!game.settings.get(MODULE_ID, "preload")) return;
