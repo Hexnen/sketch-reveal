@@ -191,6 +191,7 @@
   "SKETCHREVEAL.Scene.OverridesHint": "Changes the preset's configuration for this scene only. Save the scene first after picking a preset.",
   "SKETCHREVEAL.Scene.EditOverrides": "Edit overrides",
   "SKETCHREVEAL.Scene.ResetOverrides": "Reset",
+  "SKETCHREVEAL.Scene.ResetConfirm": "Remove all {n} configuration overrides of this scene? This cannot be undone.",
   "SKETCHREVEAL.Scene.Preview": "Preview",
   "SKETCHREVEAL.Scene.PickPreset": "Pick a preset and save the scene first.",
   "SKETCHREVEAL.Scene.NothingToPreview": "Enable it, pick a preset and save to preview.",

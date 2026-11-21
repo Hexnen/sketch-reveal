@@ -191,6 +191,7 @@
   "SKETCHREVEAL.Scene.OverridesHint": "Zmienia konfigurację presetu tylko dla tej sceny. Po wybraniu presetu najpierw zapisz scenę.",
   "SKETCHREVEAL.Scene.EditOverrides": "Edytuj nadpisania",
   "SKETCHREVEAL.Scene.ResetOverrides": "Wyzeruj",
+  "SKETCHREVEAL.Scene.ResetConfirm": "Usunąć wszystkie nadpisania konfiguracji tej sceny ({n})? Tego nie da się cofnąć.",
   "SKETCHREVEAL.Scene.Preview": "Podgląd",
   "SKETCHREVEAL.Scene.PickPreset": "Wybierz preset i najpierw zapisz scenę.",
   "SKETCHREVEAL.Scene.NothingToPreview": "Włącz, wybierz preset i zapisz, żeby zobaczyć podgląd.",

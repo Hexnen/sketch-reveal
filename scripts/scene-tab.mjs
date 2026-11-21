@@ -173,6 +173,10 @@ export function onRenderSceneConfig(app, html) {
     new RevealEditor({ scene: app.document }).render({ force: true });
   });
   tab.querySelector('[data-sr="reset"]').addEventListener("click", async () => {
+    // nieodwracalne (strojone ręcznie nadpisania znikają jednym kliknięciem) — jak usuwanie presetu, najpierw pytanie
+    const n = Object.keys(foundry.utils.flattenObject(sceneFlags(app.document).override ?? {})).length;
+    const ok = await foundry.applications.api.DialogV2.confirm({ window: { title: T("Scene.ResetOverrides") }, content: `<p>${esc(T("Scene.ResetConfirm", { n }))}</p>` });
+    if (!ok) return;
     await app.document.update({ [`flags.${MODULE_ID}.override`]: new foundry.data.operators.ForcedDeletion() }); // v14: „-=” jest przestarzałe
     app.render();
   });
