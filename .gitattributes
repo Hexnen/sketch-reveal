@@ -1,0 +1,8 @@
+# keep dev, tooling and build sources out of the release module.zip (git archive)
+/dev export-ignore
+/tools export-ignore
+/src export-ignore
+/package.json export-ignore
+/package-lock.json export-ignore
+/.gitignore export-ignore
+/.gitattributes export-ignore
