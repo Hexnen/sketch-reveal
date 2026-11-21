@@ -2,7 +2,7 @@
   "id": "sketch-reveal",
   "title": "Sketch Reveal: Splashes & Transitions",
   "description": "Sketch-to-paint reveal splashes and scene transitions (WebGL effects: spread, speedpaint, strokes, watercolor). Per-scene configuration with overrides, plus a preset manager in the sidebar.",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "compatibility": {
     "minimum": "14",
     "verified": "14"
@@ -46,6 +46,6 @@
     ]
   },
   "manifest": "https://github.com/Hexnen/sketch-reveal/releases/latest/download/module.json",
-  "download": "https://github.com/Hexnen/sketch-reveal/releases/download/v0.2.9/module.zip",
+  "download": "https://github.com/Hexnen/sketch-reveal/releases/download/v0.2.10/module.zip",
   "bugs": "https://github.com/Hexnen/sketch-reveal/issues"
 }
